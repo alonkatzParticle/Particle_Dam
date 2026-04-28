@@ -38,14 +38,23 @@ function AuthGuard({ children }) {
   return children
 }
 
+// ── Pending guard: only logged-in pending users ───────────────────────────
+function PendingGuard({ children }) {
+  const { user } = useAuth()
+  if (user === undefined) return null          // still loading
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role !== 'pending') return <Navigate to="/raw/library" replace />
+  return children
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
           {/* Public routes */}
-          <Route path="/login"   element={<LoginPage />} />
-          <Route path="/pending" element={<PendingPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/pending" element={<PendingGuard><PendingPage /></PendingGuard>} />
 
           {/* Protected routes — wrapped in AppLayout */}
           <Route element={<AuthGuard><AppLayout /></AuthGuard>}>
