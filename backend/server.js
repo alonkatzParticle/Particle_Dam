@@ -68,12 +68,12 @@ app.get('/auth/google', (req, res) => {
 
 app.get('/auth/google/callback', async (req, res) => {
   const { code, error, state } = req.query;
-  const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`
 
   const sendToPopup = (data) => {
     const json = JSON.stringify(data)
+    // Use '*' — the message contains no secrets (session is in the httpOnly cookie)
     res.send(authHtml(`
-      try { window.opener.postMessage(${json}, '${origin}'); } catch(e) {}
+      try { window.opener.postMessage(${json}, '*'); } catch(e) {}
       window.close();
     `))
   }
