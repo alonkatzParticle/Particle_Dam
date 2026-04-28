@@ -1,0 +1,32 @@
+services:
+  asset-library:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3010:3001"
+    env_file:
+      - ./backend/.env          # Dropbox token, API keys, admin password, etc.
+    environment:
+      PORT: "3001"
+      RAW_DB_PATH: /data/asset_library.db
+      ADS_DB_PATH: /data/ad_library.db
+      BRAND_DB_PATH: /data/brand_library.db
+    volumes:
+      # Databases — host files are bind-mounted so data is never lost on rebuild
+      - ./backend/asset_library.db:/data/asset_library.db
+      - ./backend/brand_library.db:/data/brand_library.db
+      - ../Ad Library/backend/ad_library.db:/data/ad_library.db
+      # AI embedding model cache — avoids re-downloading 23MB on every restart
+      - model_cache:/app/backend/model_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/raw/assets?limit=1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  model_cache:
+    driver: local

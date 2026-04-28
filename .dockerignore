@@ -1,0 +1,35 @@
+# Dependencies — installed fresh inside the image
+node_modules
+*/node_modules
+
+# Dev-only files
+*.log
+.env
+.env.*
+!.env.example
+
+# SQLite databases — volume-mounted at runtime, never baked into image
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend source — only the built dist/ is needed in the FINAL image,
+# but the build stage needs ALL of src/, index.html, configs, etc.
+# The build stage copies everything; only the dist/ is kept in stage-2.
+# So we don't exclude any frontend files here.
+
+# Git
+.git
+.gitignore
+
+# Editor
+.DS_Store
+*.swp
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Model cache — volume-mounted
+backend/model_cache

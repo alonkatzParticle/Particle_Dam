@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Databases — never commit; bind-mounted at runtime
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+backend/.env
+
+# Build artifacts
+dist/
+frontend/dist/
+
+# AI model cache
+backend/model_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Data directory (server-side)
+data/
