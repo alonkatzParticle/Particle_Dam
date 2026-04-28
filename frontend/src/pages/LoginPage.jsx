@@ -40,16 +40,26 @@ export default function LoginPage() {
 
   // Listen for the postMessage from the popup
   useEffect(() => {
+    const fetchMe = (redirectTo, retries = 4, delay = 400) =>
+      fetch('/auth/me', { credentials: 'include' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.user) {
+            setUser(d.user)
+            if (d.user.role === 'pending') navigate('/pending')
+            else navigate(redirectTo || '/raw/library')
+          } else if (retries > 0) {
+            setTimeout(() => fetchMe(redirectTo, retries - 1, delay), delay)
+          } else {
+            setPopupError('error')
+          }
+        })
+        .catch(() => retries > 0 && setTimeout(() => fetchMe(redirectTo, retries - 1, delay), delay))
+
     const handler = (e) => {
       if (e.data?.type !== 'dam-auth') return
       if (e.data.status === 'success') {
-        fetch('/auth/me', { credentials: 'include' })
-          .then(r => r.json())
-          .then(d => {
-            setUser(d.user)
-            if (d.user?.role === 'pending') navigate('/pending')
-            else navigate(e.data.redirectTo || '/raw/library')
-          })
+        fetchMe(e.data.redirectTo)
       } else {
         setPopupError(e.data.code || 'error')
       }
