@@ -1,0 +1,14 @@
+{
+  "name": "particle-dam",
+  "private": true,
+  "scripts": {
+    "db:pull": "rsync -avz --progress -e 'sshpass -p \"6tcIHDMrWR6AN#ri2BuI\" ssh -o StrictHostKeyChecking=no' deploy@76.13.2.74:/var/www/dam/data/*.db ./backend/ && echo 'DBs synced from production ✓'",
+    "db:push": "rsync -avz --progress -e 'sshpass -p \"6tcIHDMrWR6AN#ri2BuI\" ssh -o StrictHostKeyChecking=no' ./backend/*.db deploy@76.13.2.74:/var/www/dam/data/ && echo 'DBs pushed to production ✓'",
+    "dev:backend": "concurrently --names 'backend,frontend' --prefix-colors 'cyan,magenta' 'cd backend && node -r dotenv/config server.js' 'cd frontend && npm run dev'",
+    "dev:prod": "cd frontend && npm run dev:prod",
+    "deploy": "git push && ssh deploy@76.13.2.74 'cd /var/www/dam && ./deploy.sh'"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

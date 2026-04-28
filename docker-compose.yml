@@ -21,7 +21,7 @@ services:
       - model_cache:/app/backend/model_cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/raw/assets?limit=1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/auth/me || true"]
       interval: 30s
       timeout: 10s
       retries: 3

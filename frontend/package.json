@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:prod": "VITE_API_TARGET=production vite",
+    "dev:backend": "VITE_API_TARGET=node vite",
     "build": "vite build",
     "preview": "vite preview"
   },

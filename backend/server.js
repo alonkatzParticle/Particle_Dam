@@ -8,14 +8,16 @@ require('dotenv').config();
 process.on('uncaughtException',  err    => console.error('[Server] Uncaught exception:', err.message));
 process.on('unhandledRejection', reason => console.error('[Server] Unhandled rejection:', reason?.message || reason));
 
-const express   = require('express');
-const cors      = require('cors');
-const multer    = require('multer');
-const path      = require('path');
+const express      = require('express');
+const cors         = require('cors');
+const cookieParser = require('cookie-parser');
+const multer       = require('multer');
+const path         = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const makeDb             = require('./makeDb');
 const makeSync           = require('./makeSync');
+const { getAuthUrl, handleCallback, requireAuth, requireAdmin, FRONTEND_URL } = require('./auth');
 const makeUploadWatcher  = require('./makeUploadWatcher');
 const { getTemporaryLink, getThumbnailResponse, getSharedLink, uploadToDropbox,
         isThumbnailable, getDropboxToken, encodeDropboxArg } = require('./dropbox_lib');
@@ -46,22 +48,92 @@ const uploadWatcher = makeUploadWatcher(raw.db, rawSync);
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '5mb' }));
+app.use(cookieParser());
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
-// ─── Auth (shared) ────────────────────────────────────────────────────────────
+// ─── Google OAuth routes ──────────────────────────────────────────────────────
 
-app.get('/api/auth/mode', (_req, res) => res.json({ restricted: Boolean(process.env.ADMIN_PASSWORD) }));
+const authHtml = (script) =>
+  `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Signing in…</title></head>` +
+  `<body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#030a03;color:#00ff41;">` +
+  `<p>Signing in…</p><script>${script}</scr` + `ipt></body></html>`
 
-app.post('/api/auth/unlock', (req, res) => {
-  const { password } = req.body ?? {};
-  const secret = process.env.ADMIN_PASSWORD;
-  if (!secret) return res.json({ ok: true });
-  if (password === secret) return res.json({ ok: true });
-  return res.status(401).json({ ok: false, error: 'Incorrect password' });
+app.get('/auth/google', (req, res) => {
+  const from = req.query.from || ''
+  res.redirect(getAuthUrl(from));
 });
+
+app.get('/auth/google/callback', async (req, res) => {
+  const { code, error, state } = req.query;
+  const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`
+
+  const sendToPopup = (data) => {
+    const json = JSON.stringify(data)
+    res.send(authHtml(`
+      try { window.opener.postMessage(${json}, '${origin}'); } catch(e) {}
+      window.close();
+    `))
+  }
+
+  if (error || !code) return sendToPopup({ type: 'dam-auth', status: 'error', code: 'cancelled' })
+
+  // Decode intended destination from OAuth state
+  let redirectTo = '/raw/library'
+  if (state) {
+    try { redirectTo = Buffer.from(state, 'base64url').toString('utf8') || redirectTo } catch (_) {}
+  }
+
+  try {
+    const { token, user } = await handleCallback(code, raw.db);
+    res.cookie('dam_session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+    sendToPopup({ type: 'dam-auth', status: 'success', role: user.role, redirectTo })
+  } catch (err) {
+    console.error('[Auth] OAuth callback error:', err.message);
+    const code = err.message === 'EMAIL_NOT_ALLOWED' ? 'domain' : 'error';
+    sendToPopup({ type: 'dam-auth', status: 'error', code })
+  }
+});
+
+app.post('/auth/logout', (req, res) => {
+  res.clearCookie('dam_session');
+  res.json({ ok: true });
+});
+
+app.get('/auth/me', requireAuth(raw.db), (req, res) => {
+  const { id, email, name, picture, role } = req.user;
+  res.json({ user: { id, email, name, picture, role } });
+});
+
+// ─── Admin: user management ───────────────────────────────────────────────────
+
+app.get('/api/admin/users', requireAuth(raw.db), requireAdmin, (_req, res) => {
+  const users = raw.db.prepare('SELECT id, email, name, picture, role, created_at FROM users ORDER BY created_at ASC').all();
+  res.json({ users });
+});
+
+app.patch('/api/admin/users/:id', requireAuth(raw.db), requireAdmin, (req, res) => {
+  const { role } = req.body;
+  if (!['admin', 'member', 'pending'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  raw.db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/users/:id', requireAuth(raw.db), requireAdmin, (req, res) => {
+  raw.db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ─── Protect all /api/* routes ────────────────────────────────────────────────
+
+app.use('/api', requireAuth(raw.db));
 
 // ─── Helper: mount all standard asset routes on a given prefix + db ───────────
 // This avoids duplicating 300+ lines of route code for raw vs ads.

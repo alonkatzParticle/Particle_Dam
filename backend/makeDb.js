@@ -90,6 +90,16 @@ module.exports = function makeDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_tags_path         ON tags(path);
     CREATE INDEX IF NOT EXISTS idx_monday_links_asset  ON asset_monday_links(asset_id);
     CREATE INDEX IF NOT EXISTS idx_monday_links_monday ON asset_monday_links(monday_id);
+
+    CREATE TABLE IF NOT EXISTS users (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      email      TEXT UNIQUE NOT NULL,
+      name       TEXT,
+      picture    TEXT,
+      role       TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   `);
 
   // ─── Migrations (safe to re-run) ────────────────────────────────────────────

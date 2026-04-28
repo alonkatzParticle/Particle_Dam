@@ -1,8 +1,9 @@
 import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Library, Sparkles, X, Upload } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Library, Sparkles, X, Upload, Users, LogOut } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { cn } from '../lib/utils'
 import { ApiContext } from '../lib/ApiContext'
+import { useAuth } from '../lib/AuthContext'
 
 function SyncDot({ status }) {
   if (!status) return null
@@ -26,6 +27,14 @@ export function AppLayout() {
   const isBrand  = location.pathname.startsWith('/brand')
   const basePath = isBrand ? '/brand' : isAds ? '/ads' : '/raw'
   const apiBase  = isBrand ? '/api/brand' : isAds ? '/api/ads' : '/api/raw'
+  const { user, setUser } = useAuth()
+  const isAdmin = user?.role === 'admin'
+
+  const handleLogout = async () => {
+    await fetch('/auth/logout', { method: 'POST', credentials: 'include' })
+    setUser(null)
+    navigate('/login')
+  }
 
   const [syncStatus, setSyncStatus]         = useState(null)
   const [syncing, setSyncing]               = useState(false)
@@ -317,9 +326,36 @@ export function AppLayout() {
           </div>
         </div>
 
+        {/* User strip */}
+        <div className="px-3 pb-3 pt-2 border-t border-[var(--sidebar-border)] flex items-center gap-2.5">
+          {user?.picture
+            ? <img src={user.picture} alt="" className="w-7 h-7 rounded-full flex-shrink-0" />
+            : <div className="w-7 h-7 rounded-full bg-[var(--sidebar-border)] flex-shrink-0 flex items-center justify-center text-xs text-[var(--muted-foreground)]">
+                {user?.name?.[0]?.toUpperCase() ?? '?'}
+              </div>
+          }
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-medium text-[var(--foreground)] truncate leading-tight">{user?.name}</p>
+            <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight opacity-60">{user?.role}</p>
+          </div>
+          {isAdmin && (
+            <NavLink to="/admin/users" title="Manage users"
+              className={({ isActive }) => cn(
+                'p-1.5 rounded-lg transition-colors',
+                isActive ? 'text-[var(--primary)] bg-white/5' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-white/5'
+              )}>
+              <Users size={13} />
+            </NavLink>
+          )}
+          <button onClick={handleLogout} title="Sign out"
+            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-red-400 hover:bg-white/5 transition-colors">
+            <LogOut size={13} />
+          </button>
+        </div>
+
         {/* Version */}
-        <div className="px-4 pb-3 pt-1">
-          <span className="text-[10px] text-[var(--muted-foreground)] opacity-30 font-mono select-none">v0.0.1</span>
+        <div className="px-4 pb-3">
+          <span className="text-[10px] text-[var(--muted-foreground)] opacity-30 font-mono select-none">v0.0.2</span>
         </div>
       </aside>
 
