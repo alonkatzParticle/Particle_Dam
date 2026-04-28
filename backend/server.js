@@ -77,8 +77,12 @@ app.get('/auth/google/callback', async (req, res) => {
 
   if (error || !code) {
     return res.send(authHtml(`
-      try { window.opener.postMessage({ type: 'dam-auth', status: 'error', code: 'cancelled' }, '*'); } catch(e) {}
-      window.close();
+      (function(){
+        var d={type:'dam-auth',status:'error',code:'cancelled'};
+        try{var bc=new BroadcastChannel('dam-auth');bc.postMessage(d);bc.close();}catch(e){}
+        try{if(window.opener)window.opener.postMessage(d,'*');}catch(e){}
+        window.close();
+      })()
     `))
   }
 
@@ -92,17 +96,22 @@ app.get('/auth/google/callback', async (req, res) => {
     });
     // The popup fetches /auth/me itself (it has the cookie) then passes the
     // full user to the parent — avoids any cross-window cookie timing issues.
-    const userData = JSON.stringify({ id: user.id, email: user.email, name: user.name, picture: user.picture, role: user.role })
+    const userData = { id: user.id, email: user.email, name: user.name, picture: user.picture, role: user.role };
+    const fallback = JSON.stringify(userData);
     res.send(authHtml(`
       fetch('/auth/me', { credentials: 'include' })
         .then(r => r.json())
         .then(d => {
-          const u = d.user || ${userData};
-          try { window.opener.postMessage({ type: 'dam-auth', status: 'success', user: u, redirectTo: ${JSON.stringify(redirectTo)} }, '*'); } catch(e) {}
+          var u = (d && d.user) ? d.user : ${fallback};
+          var msg = {type:'dam-auth',status:'success',user:u,redirectTo:${JSON.stringify(redirectTo)}};
+          try{var bc=new BroadcastChannel('dam-auth');bc.postMessage(msg);bc.close();}catch(e){}
+          try{if(window.opener)window.opener.postMessage(msg,'*');}catch(e){}
           window.close();
         })
-        .catch(() => {
-          try { window.opener.postMessage({ type: 'dam-auth', status: 'success', user: ${userData}, redirectTo: ${JSON.stringify(redirectTo)} }, '*'); } catch(e) {}
+        .catch(function(){
+          var msg = {type:'dam-auth',status:'success',user:${fallback},redirectTo:${JSON.stringify(redirectTo)}};
+          try{var bc=new BroadcastChannel('dam-auth');bc.postMessage(msg);bc.close();}catch(e){}
+          try{if(window.opener)window.opener.postMessage(msg,'*');}catch(e){}
           window.close();
         });
     `))
@@ -110,8 +119,12 @@ app.get('/auth/google/callback', async (req, res) => {
     console.error('[Auth] OAuth callback error:', err.message);
     const code = err.message === 'EMAIL_NOT_ALLOWED' ? 'domain' : 'error';
     res.send(authHtml(`
-      try { window.opener.postMessage({ type: 'dam-auth', status: 'error', code: '${code}' }, '*'); } catch(e) {}
-      window.close();
+      (function(){
+        var d={type:'dam-auth',status:'error',code:'${code}'};
+        try{var bc=new BroadcastChannel('dam-auth');bc.postMessage(d);bc.close();}catch(e){}
+        try{if(window.opener)window.opener.postMessage(d,'*');}catch(e){}
+        window.close();
+      })()
     `))
   }
 });

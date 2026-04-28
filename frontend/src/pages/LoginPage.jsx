@@ -38,20 +38,32 @@ export default function LoginPage() {
       `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,location=no`)
   }
 
-  // Listen for the postMessage from the popup
+  // Listen for auth result from the popup via BroadcastChannel (primary)
+  // and window.postMessage (fallback for when opener is preserved)
   useEffect(() => {
     const handler = (e) => {
-      if (e.data?.type !== 'dam-auth') return
-      if (e.data.status === 'success' && e.data.user) {
-        setUser(e.data.user)
-        if (e.data.user.role === 'pending') navigate('/pending')
-        else navigate(e.data.redirectTo || '/raw/library')
-      } else if (e.data.status === 'error') {
-        setPopupError(e.data.code || 'error')
+      const data = e.data ?? e  // BroadcastChannel gives e directly, window gives e.data
+      if (data?.type !== 'dam-auth') return
+      if (data.status === 'success' && data.user) {
+        setUser(data.user)
+        if (data.user.role === 'pending') navigate('/pending')
+        else navigate(data.redirectTo || '/raw/library')
+      } else if (data.status === 'error') {
+        setPopupError(data.code || 'error')
       }
     }
+
+    let bc = null
+    try {
+      bc = new BroadcastChannel('dam-auth')
+      bc.onmessage = handler
+    } catch (e) { /* not supported */ }
+
     window.addEventListener('message', handler)
-    return () => window.removeEventListener('message', handler)
+    return () => {
+      if (bc) bc.close()
+      window.removeEventListener('message', handler)
+    }
   }, [navigate, setUser])
 
 
