@@ -26,3 +26,6 @@ Thumbs.db
 
 # Data directory (server-side)
 data/
+
+# Server-side Docker Compose overrides (volume paths, ports)
+docker-compose.override.yml
