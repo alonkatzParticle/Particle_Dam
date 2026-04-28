@@ -13,11 +13,12 @@ const cors         = require('cors');
 const cookieParser = require('cookie-parser');
 const multer       = require('multer');
 const path         = require('path');
+const jwt          = require('jsonwebtoken');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const makeDb             = require('./makeDb');
 const makeSync           = require('./makeSync');
-const { getAuthUrl, handleCallback, requireAuth, requireAdmin, FRONTEND_URL } = require('./auth');
+const { getAuthUrl, handleCallback, requireAuth, requireAdmin, FRONTEND_URL, JWT_SECRET } = require('./auth');
 const makeUploadWatcher  = require('./makeUploadWatcher');
 const { getTemporaryLink, getThumbnailResponse, getSharedLink, uploadToDropbox,
         isThumbnailable, getDropboxToken, encodeDropboxArg } = require('./dropbox_lib');
@@ -147,7 +148,7 @@ app.get('/auth/me', (req, res) => {
       return res.json({ user: null })
     }
     res.json({ user })
-  } catch {
+  } catch (err) {
     res.clearCookie('dam_session')
     res.json({ user: null })
   }
