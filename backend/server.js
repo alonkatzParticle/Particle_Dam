@@ -107,9 +107,21 @@ app.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/auth/me', requireAuth(raw.db), (req, res) => {
-  const { id, email, name, picture, role } = req.user;
-  res.json({ user: { id, email, name, picture, role } });
+app.get('/auth/me', (req, res) => {
+  const token = req.cookies?.dam_session
+  if (!token) return res.json({ user: null })
+  try {
+    const payload = jwt.verify(token, JWT_SECRET)
+    const user = raw.db.prepare('SELECT id, email, name, picture, role FROM users WHERE id = ?').get(payload.id)
+    if (!user) {
+      res.clearCookie('dam_session')
+      return res.json({ user: null })
+    }
+    res.json({ user })
+  } catch {
+    res.clearCookie('dam_session')
+    res.json({ user: null })
+  }
 });
 
 // ─── Admin: user management ───────────────────────────────────────────────────
