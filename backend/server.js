@@ -69,21 +69,17 @@ app.get('/auth/google', (req, res) => {
 app.get('/auth/google/callback', async (req, res) => {
   const { code, error, state } = req.query;
 
-  const sendToPopup = (data) => {
-    const json = JSON.stringify(data)
-    // Use '*' — the message contains no secrets (session is in the httpOnly cookie)
-    res.send(authHtml(`
-      try { window.opener.postMessage(${json}, '*'); } catch(e) {}
-      window.close();
-    `))
-  }
-
-  if (error || !code) return sendToPopup({ type: 'dam-auth', status: 'error', code: 'cancelled' })
-
   // Decode intended destination from OAuth state
   let redirectTo = '/raw/library'
   if (state) {
     try { redirectTo = Buffer.from(state, 'base64url').toString('utf8') || redirectTo } catch (_) {}
+  }
+
+  if (error || !code) {
+    return res.send(authHtml(`
+      try { window.opener.postMessage({ type: 'dam-auth', status: 'error', code: 'cancelled' }, '*'); } catch(e) {}
+      window.close();
+    `))
   }
 
   try {
@@ -94,13 +90,33 @@ app.get('/auth/google/callback', async (req, res) => {
       sameSite: 'lax',
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
-    sendToPopup({ type: 'dam-auth', status: 'success', role: user.role, redirectTo })
+    // The popup fetches /auth/me itself (it has the cookie) then passes the
+    // full user to the parent — avoids any cross-window cookie timing issues.
+    const userData = JSON.stringify({ id: user.id, email: user.email, name: user.name, picture: user.picture, role: user.role })
+    res.send(authHtml(`
+      fetch('/auth/me', { credentials: 'include' })
+        .then(r => r.json())
+        .then(d => {
+          const u = d.user || ${userData};
+          try { window.opener.postMessage({ type: 'dam-auth', status: 'success', user: u, redirectTo: ${JSON.stringify(redirectTo)} }, '*'); } catch(e) {}
+          window.close();
+        })
+        .catch(() => {
+          try { window.opener.postMessage({ type: 'dam-auth', status: 'success', user: ${userData}, redirectTo: ${JSON.stringify(redirectTo)} }, '*'); } catch(e) {}
+          window.close();
+        });
+    `))
   } catch (err) {
     console.error('[Auth] OAuth callback error:', err.message);
     const code = err.message === 'EMAIL_NOT_ALLOWED' ? 'domain' : 'error';
-    sendToPopup({ type: 'dam-auth', status: 'error', code })
+    res.send(authHtml(`
+      try { window.opener.postMessage({ type: 'dam-auth', status: 'error', code: '${code}' }, '*'); } catch(e) {}
+      window.close();
+    `))
   }
 });
+
+
 
 app.post('/auth/logout', (req, res) => {
   res.clearCookie('dam_session');
