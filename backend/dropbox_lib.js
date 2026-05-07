@@ -133,7 +133,7 @@ async function listFolderContinue(cursor) {
 
 // ─── Thumbnails ───────────────────────────────────────────────────────────────
 
-const THUMBNAIL_ELIGIBLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'tiff', 'bmp', 'mp4', 'mov', 'avi']);
+const THUMBNAIL_ELIGIBLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'tiff', 'bmp', 'mp4', 'mov', 'avi', 'pdf']);
 
 function isThumbnailable(extension) {
   return THUMBNAIL_ELIGIBLE.has((extension || '').toLowerCase());
@@ -143,14 +143,15 @@ function isThumbnailable(extension) {
  * Fetch a thumbnail for an image or video. Returns the raw fetch Response
  * so the caller can stream it directly to the Express response.
  * Returns null if the file type is unsupported or Dropbox returns an error.
+ * Pass format='png' to preserve transparency for PNG source files.
  */
-async function getThumbnailResponse(path, size = 'w960h640') {
+async function getThumbnailResponse(path, size = 'w960h640', format = 'jpeg') {
   const token = await getDropboxToken();
   const res = await fetch('https://content.dropboxapi.com/2/files/get_thumbnail', {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Dropbox-API-Arg': encodeDropboxArg({ path, format: 'jpeg', size }),
+      'Dropbox-API-Arg': encodeDropboxArg({ path, format, size }),
     },
   });
   if (!res.ok) return null;
@@ -242,6 +243,57 @@ async function uploadToDropbox(fileBuffer, fileName, dropboxPath) {
   return { success: true, path: result.path_display, dropboxId: result.id };
 }
 
+/**
+ * Move a file in Dropbox from fromPath to toPath.
+ * Returns { path_display, id } on success.
+ */
+async function moveDropboxFile(fromPath, toPath) {
+  const token = await getDropboxToken();
+  const response = await fetch('https://api.dropboxapi.com/2/files/move_v2', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from_path: fromPath,
+      to_path: toPath,
+      allow_shared_folder: false,
+      autorename: false,
+      allow_ownership_transfer: false,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Dropbox move failed: ${err}`);
+  }
+  const result = await response.json();
+  return result.metadata;
+}
+
+/**
+ * Create a folder in Dropbox (no-op if it already exists).
+ */
+async function createDropboxFolder(folderPath) {
+  const token = await getDropboxToken();
+  const response = await fetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path: folderPath, autorename: false }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    // Ignore "already exists" errors
+    if (text.includes('path/conflict/folder')) return { already_exists: true };
+    throw new Error(`Dropbox create_folder failed: ${text}`);
+  }
+  const result = await response.json();
+  return result.metadata;
+}
+
 module.exports = {
   encodeDropboxArg,
   getDropboxToken,
@@ -252,4 +304,6 @@ module.exports = {
   getSharedLink,
   uploadToDropbox,
   isThumbnailable,
+  moveDropboxFile,
+  createDropboxFolder,
 };

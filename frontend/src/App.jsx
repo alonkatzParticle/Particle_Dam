@@ -69,6 +69,7 @@ export default function App() {
 
             {/* Brand Kit */}
             <Route path="/brand/library" element={<ApiContext.Provider value="/api/brand"><LibraryPage /></ApiContext.Provider>} />
+            <Route path="/brand/tagging" element={<ApiContext.Provider value="/api/brand"><TaggingQueuePage /></ApiContext.Provider>} />
 
             {/* Upload approval queue */}
             <Route path="/uploads" element={<UploadQueuePage />} />

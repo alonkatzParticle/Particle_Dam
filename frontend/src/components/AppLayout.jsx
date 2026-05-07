@@ -93,7 +93,11 @@ export function AppLayout() {
       const poll = setInterval(async () => {
         const s = await fetch(`${apiBase}/sync/status`).then(r => r.json()).catch(() => ({}))
         setSyncStatus(s)
-        if (!s.running) { setSyncing(false); clearInterval(poll) }
+        if (!s.running) {
+          setSyncing(false)
+          clearInterval(poll)
+          window.dispatchEvent(new CustomEvent('asset-library-synced'))
+        }
       }, 2000)
     } catch {
       setSyncing(false)
@@ -125,10 +129,10 @@ export function AppLayout() {
           </div>
           <div>
             <p className="text-[13px] font-semibold text-[var(--foreground)] leading-none">
-              {isAds ? 'Ad Library' : 'Asset Library'}
+              Creative Production Hub
             </p>
             <p className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-              {isBrand ? 'Brand Kit' : isAds ? 'Final Assets' : 'Raw Files'}
+              {isBrand ? 'Brand Library' : isAds ? 'Ad Library' : 'Raw Library'}
             </p>
           </div>
         </div>
@@ -156,7 +160,7 @@ export function AppLayout() {
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-white/5'
               )}
             >
-              Final
+              Ads
             </Link>
             <Link
               to="/brand/library"
@@ -183,7 +187,6 @@ export function AppLayout() {
             Browse
           </NavLink>
 
-          {!isAds && !isBrand && (<>
           <NavLink to={`${basePath}/tagging`} className={({ isActive }) =>
             cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
               isActive
@@ -201,6 +204,7 @@ export function AppLayout() {
             )}
           </NavLink>
 
+          {!isAds && !isBrand && (
           <NavLink to="/uploads" className={({ isActive }) =>
             cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
               isActive
@@ -214,7 +218,7 @@ export function AppLayout() {
               </span>
             )}
           </NavLink>
-          </>)}
+          )}
         </nav>
 
         {/* ── Persistent tagging job widget ─────────────────────────────── */}

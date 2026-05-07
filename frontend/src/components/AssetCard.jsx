@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { formatBytes, formatDate, extGroup, EXT_ICON, cn } from '../lib/utils'
 import { AI_TAG_MAP, AI_TAG_CATEGORIES, parseAiTags } from '../lib/aiTags'
-import { Download, ExternalLink, Play, Image, FileText, Archive, Music, X, Sparkles, Loader } from 'lucide-react'
+import { Download, ExternalLink, Play, Image, FileText, Archive, Music, X, Sparkles, Loader, ScanText } from 'lucide-react'
 import { useApiBase } from '../lib/ApiContext'
 import { wasThumbError, markThumbError } from '../lib/pageCache'
 
@@ -38,7 +38,7 @@ function AiTagPill({ tagId }) {
   )
 }
 
-function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
+function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated, onContentTypeChange }) {
   const apiBase = useApiBase()
   const [previewUrl, setPreviewUrl]     = useState(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
@@ -50,9 +50,14 @@ function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
     try { return JSON.parse(asset.ai_actions || '[]') } catch { return [] }
   })
   const [localDescription, setLocalDescription] = useState(asset.ai_description || '')
+  const [localContentType, setLocalContentType] = useState(asset.content_type)
+  const [localPath, setLocalPath]               = useState(asset.path)
+  const [ctToggling, setCtToggling]             = useState(false)
 
   const group = extGroup(asset.extension)
-  const isMedia = group === 'images' || group === 'videos'
+  const ext   = (asset.extension || '').toLowerCase()
+  const isPdf  = ext === 'pdf'
+  const isMedia = group === 'images' || group === 'videos' || isPdf
   const isVideo = group === 'videos'
   const isAds = apiBase !== '/api'
 
@@ -160,9 +165,16 @@ function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
               className="w-full rounded-lg bg-black/40 border border-[var(--border)] overflow-hidden flex items-center justify-center"
               style={{ minHeight: 200 }}>
               {previewUrl
-                ? group === 'videos'
-                  ? <video src={previewUrl} controls className="w-full max-h-80 object-contain" />
-                  : <img src={previewUrl} alt={asset.name} className="max-h-80 object-contain mx-auto" />
+                ? isPdf
+                  ? <iframe
+                      src={previewUrl}
+                      title={asset.name}
+                      className="w-full rounded"
+                      style={{ height: 320, border: 'none' }}
+                    />
+                  : group === 'videos'
+                    ? <video src={previewUrl} controls className="w-full max-h-80 object-contain" />
+                    : <img src={previewUrl} alt={asset.name} className="max-h-80 object-contain mx-auto" />
                 : <div className="flex flex-col items-center gap-2 p-8 text-[var(--muted-foreground)]">
                     <span className="text-3xl animate-pulse">{EXT_ICON[group]}</span>
                     <span className="text-xs">Loading preview…</span>
@@ -250,13 +262,30 @@ function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
               </div>
             )}
 
-            {/* Scene description */}
-            {localDescription && (
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mb-1">Scene</p>
-                <p className="text-xs text-[var(--muted-foreground)] italic leading-relaxed">{localDescription}</p>
-              </div>
-            )}
+            {/* Description + Detected Text — split from combined ai_description */}
+            {localDescription && (() => {
+              const m = localDescription.match(/·\s*Text:\s*(.+)$/)
+              const detectedText = m ? m[1].trim() : ''
+              const cleanDesc    = detectedText ? localDescription.replace(/\s*·\s*Text:\s*.+$/, '').trim() : localDescription
+              return (
+                <>
+                  {cleanDesc && (
+                    <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">Description</p>
+                      <p className="text-xs text-[var(--muted-foreground)] italic leading-relaxed">{cleanDesc}</p>
+                    </div>
+                  )}
+                  {detectedText && (
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mb-1 flex items-center gap-1">
+                        <ScanText size={9} className="opacity-60" /> Detected Text
+                      </p>
+                      <p className="text-xs font-mono text-[var(--foreground)]/80 bg-white/5 rounded px-2 py-1 leading-relaxed break-all">{detectedText}</p>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
 
             {!localAiTags.length && !localActions.length && !generating && (
               <p className="text-xs text-[var(--muted-foreground)]">
@@ -270,8 +299,73 @@ function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
           {/* Path */}
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mb-1">Dropbox Path</p>
-            <p className="text-xs text-[var(--muted-foreground)] font-mono break-all">{asset.path}</p>
+            <p className="text-xs text-[var(--muted-foreground)] font-mono break-all">{localPath}</p>
           </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-4 pt-1 border-t border-[var(--border)]">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mb-1">Added to Dropbox</p>
+              <p className="text-xs text-[var(--muted-foreground)]">{asset.modified_at ? new Date(asset.modified_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mb-1">Added to Library</p>
+              <p className="text-xs text-[var(--muted-foreground)]">{asset.uploaded_at ? new Date(asset.uploaded_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</p>
+            </div>
+          </div>
+
+          {/* Real / AI toggle — raw library only, pinned to bottom */}
+          {(localContentType === 'real' || localContentType === 'ai') && (
+            <div className="flex items-center justify-between py-2.5 px-3 rounded-lg bg-white/[0.03] border border-[var(--border)]">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">Content Type</p>
+                <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">Move between Real and AI folders in Dropbox</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {ctToggling && <span className="text-[10px] text-[var(--muted-foreground)] animate-pulse">Moving…</span>}
+                <div className="flex items-center rounded-full bg-white/[0.05] border border-white/[0.08] p-0.5 gap-0.5">
+                  {['real', 'ai'].map(type => {
+                    const isActive = localContentType === type
+                    return (
+                      <button
+                        key={type}
+                        disabled={ctToggling}
+                        onClick={async () => {
+                          if (isActive || ctToggling) return
+                          setCtToggling(true)
+                          const prev = localContentType
+                          setLocalContentType(type)
+                          try {
+                            const r = await fetch(
+                              `${apiBase.replace('/api/ads', '/api/raw')}/assets/${asset.id}/content-type`,
+                              { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content_type: type }) }
+                            )
+                            const data = await r.json()
+                            if (!r.ok) throw new Error(data.error)
+                            setLocalPath(data.path)
+                            onContentTypeChange?.(asset.id, type, data.path)
+                          } catch (err) {
+                            setLocalContentType(prev)
+                            console.error('Toggle failed:', err.message)
+                          } finally { setCtToggling(false) }
+                        }}
+                        className={cn(
+                          'px-3 py-1 rounded-full text-[11px] font-medium transition-all select-none',
+                          isActive
+                            ? type === 'real'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
+                            : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        )}
+                      >
+                        {type === 'real' ? 'Real' : 'AI'}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Actions — all in one row */}
@@ -300,16 +394,35 @@ function AssetPreviewModal({ asset, tags, onClose, onAiTagsUpdated }) {
               Monday
             </a>
           )}
-          {asset.monday?.frame_url && (
+          {asset.monday?.frame_url && (() => {
+            const isFigma = asset.monday.frame_url.includes('figma.com')
+            return (
+              <a
+                href={asset.monday.frame_url}
+                target="_blank"
+                rel="noreferrer"
+                title={isFigma ? 'Open in Figma' : 'Open Frame.io'}
+                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors border ${
+                  isFigma
+                    ? 'bg-pink-500/10 hover:bg-pink-500/20 border-pink-500/20 text-pink-400'
+                    : 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/20 text-purple-400'
+                }`}
+              >
+                <ExternalLink size={13} />
+                {isFigma ? 'Figma' : 'Frame.io'}
+              </a>
+            )
+          })()}
+          {asset.monday?.project_url && (
             <a
-              href={asset.monday.frame_url}
+              href={asset.monday.project_url}
               target="_blank"
               rel="noreferrer"
-              title={isVideo ? 'Open Frame.io' : 'Open Figma'}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 text-purple-400 text-sm font-medium transition-colors"
+              title="Open project folder"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-400 text-sm font-medium transition-colors"
             >
               <ExternalLink size={13} />
-              {isVideo ? 'Frame.io' : 'Figma'}
+              Project
             </a>
           )}
           <div className="flex-1" />
@@ -334,9 +447,14 @@ export function AssetCard({ asset, tags, onClick, onMondayClick }) {
   const [thumbError, setThumbError] = useState(() => wasThumbError(`${apiBase}:${asset.id}`))
   const group = extGroup(asset.extension)
   const Icon = GROUP_ICONS[group] || FileText
-  const canThumb = ['images', 'videos'].includes(group)
+  const ext = (asset.extension || '').toLowerCase()
+  // SVGs are served directly; images/videos/PDFs use Dropbox thumbnail API
+  const canThumb = ['images', 'videos'].includes(group) || ext === 'svg' || ext === 'pdf'
+  const isSvg  = ext === 'svg'
+  const isPdf  = ext === 'pdf'
   const isVideo = group === 'videos'
-  const aiTags = parseAiTags(asset.ai_tags)
+  // Assets that may have transparent/white backgrounds benefit from a checkered pattern
+  const needsCheckerBg = isSvg || ext === 'png'
   const hasMondayTask = !!asset.monday
 
   const assetTags = (asset.tagIds || [])
@@ -350,7 +468,15 @@ export function AssetCard({ asset, tags, onClick, onMondayClick }) {
       onClick={() => onClick(asset)}>
 
       {/* Thumbnail / icon area */}
-      <div className="relative w-full bg-black/30 flex items-center justify-center overflow-hidden" style={{ aspectRatio: '16/10' }}>
+      <div
+        className="relative w-full flex items-center justify-center overflow-hidden"
+        style={{
+          aspectRatio: '16/10',
+          background: needsCheckerBg
+            ? 'repeating-conic-gradient(#606060 0% 25%, #484848 0% 50%) 0 0 / 16px 16px'
+            : 'rgba(0,0,0,0.3)',
+        }}
+      >
         {canThumb && !thumbError ? (
           <img
             src={`${apiBase}/assets/${asset.id}/thumbnail?v=2`}
@@ -359,6 +485,11 @@ export function AssetCard({ asset, tags, onClick, onMondayClick }) {
             className="absolute inset-0 w-full h-full object-cover"
             onError={() => { markThumbError(`${apiBase}:${asset.id}`); setThumbError(true) }}
           />
+        ) : isPdf ? (
+          <div className="flex flex-col items-center justify-center gap-1.5 p-4">
+            <FileText size={28} className="text-red-400/60" />
+            <span className="text-[10px] text-[var(--muted-foreground)] text-center line-clamp-2 leading-snug">{asset.name}</span>
+          </div>
         ) : (
           <Icon size={28} className="text-[var(--muted-foreground)] opacity-40" />
         )}
@@ -407,7 +538,6 @@ export function AssetCard({ asset, tags, onClick, onMondayClick }) {
           </div>
         )}
 
-        {/* Quick links — only shown when Monday task has URLs */}
         {asset.monday && (asset.monday.dropbox_url || asset.monday.frame_url || asset.monday.monday_id) && (
           <div className="flex items-center gap-1.5 pt-0.5" onClick={e => e.stopPropagation()}>
             {asset.monday.dropbox_url && (

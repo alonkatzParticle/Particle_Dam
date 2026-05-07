@@ -19,7 +19,7 @@ export function SearchBar({ value, onChange, onAiSearch, aiActive, onClearAi, co
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Auto-trigger semantic search on debounce (600ms after user stops typing)
+  // Auto-trigger smart search on debounce (600ms after user stops typing)
   useEffect(() => {
     clearTimeout(debounceRef.current)
     if (value.trim().length >= 2) {
@@ -67,7 +67,7 @@ export function SearchBar({ value, onChange, onAiSearch, aiActive, onClearAi, co
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={handleKeyDown}
-          placeholder={aiActive ? 'Searching semantically…' : 'Search assets…'}
+          placeholder={aiActive ? 'Smart searching…' : 'Search assets…'}
           className="flex-1 bg-transparent text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none min-w-0"
         />
         <div className="flex items-center gap-2 shrink-0">
@@ -77,7 +77,7 @@ export function SearchBar({ value, onChange, onAiSearch, aiActive, onClearAi, co
             </button>
           )}
           {aiLoading
-            ? <span className="text-[11px] text-purple-400 animate-pulse">Thinking…</span>
+            ? <span className="text-[11px] text-purple-400 animate-pulse">Matching…</span>
             : loading
               ? <span className="text-[11px] text-[var(--muted-foreground)] animate-pulse">Searching…</span>
               : count !== undefined && (
@@ -92,11 +92,11 @@ export function SearchBar({ value, onChange, onAiSearch, aiActive, onClearAi, co
         </div>
       </div>
 
-      {/* AI expansion hint */}
+      {/* Smart Search hint */}
       {!aiActive && !aiLoading && (
         <p className="text-[11px] text-[var(--muted-foreground)] px-1">
           <Sparkles size={9} className="inline mr-1 text-purple-400" />
-          AI semantic search activates automatically as you type
+          Smart Search activates automatically as you type
         </p>
       )}
     </div>

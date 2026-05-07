@@ -116,6 +116,7 @@ module.exports = function makeDb(dbPath) {
   try { db.exec('ALTER TABLE assets ADD COLUMN deleted INTEGER DEFAULT 0') } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_monday_id ON assets(monday_id)') } catch (_) {}
   try { db.exec('ALTER TABLE monday_tasks ADD COLUMN board_id TEXT') } catch (_) {}
+  try { db.exec('ALTER TABLE monday_tasks ADD COLUMN campaign TEXT') } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_deleted ON assets(deleted)') } catch (_) {}
 
   // ─── Phase 1: structured DAM fields ────────────────────────────────────────
@@ -125,8 +126,16 @@ module.exports = function makeDb(dbPath) {
   try { db.exec('ALTER TABLE assets ADD COLUMN container_name TEXT') } catch (_) {}
   try { db.exec('ALTER TABLE assets ADD COLUMN content_type TEXT') } catch (_) {}
   try { db.exec('ALTER TABLE assets ADD COLUMN uploaded_by TEXT') } catch (_) {}
+  try { db.exec('ALTER TABLE assets ADD COLUMN use_count INTEGER DEFAULT 0') } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_container_type ON assets(container_type)') } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_container_name ON assets(container_name)') } catch (_) {}
+
+  // uploaded_at = when the file was first indexed into this library (never updated on re-sync)
+  try { db.exec('ALTER TABLE assets ADD COLUMN uploaded_at TEXT') } catch (_) {}
+  // Backfill existing rows from indexed_at (next best thing for existing data)
+  try { db.exec("UPDATE assets SET uploaded_at = indexed_at WHERE uploaded_at IS NULL AND indexed_at IS NOT NULL") } catch (_) {}
+  try { db.exec("UPDATE assets SET uploaded_at = modified_at WHERE uploaded_at IS NULL AND modified_at IS NOT NULL") } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_uploaded_at ON assets(uploaded_at)') } catch (_) {}
 
   // ─── Upload approval queue ──────────────────────────────────────────────────
   db.exec(`
@@ -213,8 +222,8 @@ module.exports = function makeDb(dbPath) {
       const result = db.prepare(`
         INSERT INTO assets
           (dropbox_id, name, path, path_lower, extension, size, modified_at, content_hash,
-           media_type, container_type, container_name, content_type, uploaded_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           media_type, container_type, container_name, content_type, uploaded_by, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `).run(
         asset.dropbox_id, asset.name, asset.path, asset.path_lower,
         asset.extension, asset.size, asset.modified_at, asset.content_hash,
@@ -253,7 +262,7 @@ module.exports = function makeDb(dbPath) {
       return db.prepare(`SELECT * FROM assets WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
     },
 
-    query({ search = '', tagIds = [], extensions = [], aiTags = [], untagged = false, mondayLinked = null, containerName = null, contentType = null, sort = 'newest', page = 1, limit = 60 } = {}) {
+    query({ search = '', tagIds = [], extensions = [], aiTags = [], untagged = false, mondayLinked = null, containerName = null, contentType = null, platform = null, campaign = null, mondayProduct = null, sort = 'newest', page = 1, limit = 60 } = {}) {
       const offset = (page - 1) * limit;
       const conditions = [];
       const params = [];
@@ -262,8 +271,11 @@ module.exports = function makeDb(dbPath) {
       if (mondayLinked === true)  conditions.push('a.monday_id IS NOT NULL');
       if (mondayLinked === false) conditions.push('a.monday_id IS NULL');
       if (untagged) conditions.push('a.ai_tagged_at IS NULL');
-      if (containerName) { conditions.push('a.container_name = ?'); params.push(containerName); }
-      if (contentType)   { conditions.push('a.content_type = ?');   params.push(contentType); }
+      if (containerName)  { conditions.push('a.container_name = ?');                            params.push(containerName); }
+      if (contentType)    { conditions.push('a.content_type = ?');                              params.push(contentType); }
+      if (platform)       { conditions.push(`JSON_EXTRACT(a.monday_json, '$.platform') = ?`);   params.push(platform); }
+      if (campaign)       { conditions.push(`JSON_EXTRACT(a.monday_json, '$.campaign') = ?`);   params.push(campaign); }
+      if (mondayProduct)  { conditions.push(`JSON_EXTRACT(a.monday_json, '$.product') = ?`);    params.push(mondayProduct); }
       if (search) {
         conditions.push(`(
           a.name LIKE ? OR
@@ -287,7 +299,12 @@ module.exports = function makeDb(dbPath) {
         params.push(`"${tag}"`);
       }
 
-      const ORDER_MAP = { newest: 'a.modified_at DESC', oldest: 'a.modified_at ASC', name: 'a.name ASC' };
+      const ORDER_MAP = {
+        newest:    'a.modified_at DESC',
+        oldest:    'a.modified_at ASC',
+        name:      'a.name ASC',
+        most_used: 'a.use_count DESC, a.modified_at DESC',
+      };
       const orderBy = ORDER_MAP[sort] || ORDER_MAP.newest;
 
       const baseQuery = `

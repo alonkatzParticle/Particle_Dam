@@ -47,6 +47,7 @@ const BOARDS = {
       'long_text_mkn8c1ax',     // Video Concept
       'short_text_mkn8n4bx',    // Hook
       'people',                 // Editor
+      'color_mm2v5q62',         // Campaign
     ],
     mapItem(item, cols) {
       return {
@@ -64,6 +65,7 @@ const BOARDS = {
         frame_url:   cols['link']                     || null,
         project_url: cols['link1__1']                 || null,
         editor:      cols['people']                   || null,
+        campaign:    cols['color_mm2v5q62']           || null,
       };
     },
   },

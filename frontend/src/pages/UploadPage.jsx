@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, X, Sparkles, Check, FolderOpen, ChevronRight, AlertCircle, Loader } from 'lucide-react'
+import { Upload, X, Sparkles, Check, FolderOpen, ChevronRight, AlertCircle, Loader, FolderPlus, ChevronDown } from 'lucide-react'
 import { formatBytes, extGroup, EXT_ICON, cn } from '../lib/utils'
 import { TagPill } from '../components/AssetCard'
 import { useApiBase } from '../lib/ApiContext'
@@ -94,6 +94,43 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false)
   const [results, setResults]     = useState(null)
   const [error, setError]         = useState(null)
+
+  // New product folder creation
+  const [showNewFolder, setShowNewFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [folderCreateResult, setFolderCreateResult] = useState(null)
+  const [folderCreateError, setFolderCreateError] = useState(null)
+
+  const createProductFolder = async () => {
+    const name = newFolderName.trim()
+    if (!name) return
+    setCreatingFolder(true)
+    setFolderCreateError(null)
+    setFolderCreateResult(null)
+    try {
+      const res = await fetch('/api/raw/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }).then(r => r.json())
+      if (!res.ok) throw new Error(res.error || 'Failed')
+      // Add the new folder paths to local tags so they're immediately selectable
+      const newTags = res.folders.map((f, i) => ({
+        id: `new-${name}-${i}`,
+        name: f.path.split('/').pop(),
+        path: f.path,
+        depth: 3,
+      }))
+      setTags(prev => [...prev, ...newTags])
+      setFolderCreateResult(res)
+      setNewFolderName('')
+    } catch (err) {
+      setFolderCreateError(err.message)
+    } finally {
+      setCreatingFolder(false)
+    }
+  }
 
   useEffect(() => {
     fetch(`${apiBase}/tags`).then(r => r.json()).then(setTags).catch(() => {})
@@ -248,6 +285,64 @@ export default function UploadPage() {
             </div>
           </div>
         )}
+
+        {/* New Product Folder */}
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] overflow-hidden">
+          <button
+            onClick={() => { setShowNewFolder(o => !o); setFolderCreateResult(null); setFolderCreateError(null) }}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium hover:bg-white/[0.03] transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <FolderPlus size={14} className="text-[var(--primary)]" />
+              <span>Create New Product Folder</span>
+            </div>
+            <ChevronDown size={14} className={cn('text-[var(--muted-foreground)] transition-transform', showNewFolder && 'rotate-180')} />
+          </button>
+
+          {showNewFolder && (
+            <div className="px-4 pb-4 space-y-3 border-t border-[var(--border)]">
+              <p className="text-[11px] text-[var(--muted-foreground)] pt-3">
+                Creates <strong>Real/</strong>, <strong>AI/</strong>, and <strong>CTA/</strong> subfolders under Products in Dropbox.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  value={newFolderName}
+                  onChange={e => setNewFolderName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && createProductFolder()}
+                  placeholder="Product name (e.g. Face Cream)"
+                  className="flex-1 bg-[var(--input)] border border-[var(--border)] rounded-lg text-sm px-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] transition-colors"
+                />
+                <button
+                  onClick={createProductFolder}
+                  disabled={creatingFolder || !newFolderName.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--primary)] hover:opacity-90 text-white text-sm font-medium transition-all disabled:opacity-40"
+                >
+                  {creatingFolder ? <Loader size={13} className="animate-spin" /> : <FolderPlus size={13} />}
+                  {creatingFolder ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+
+              {folderCreateError && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+                  <AlertCircle size={12} />
+                  {folderCreateError}
+                </div>
+              )}
+
+              {folderCreateResult && (
+                <div className="p-2.5 rounded-lg bg-green-500/8 border border-green-500/20">
+                  <p className="text-xs text-green-400 font-medium mb-1">
+                    <Check size={11} className="inline mr-1" />
+                    Created "{folderCreateResult.product}" with {folderCreateResult.folders.length} subfolders
+                  </p>
+                  {folderCreateResult.folders.map((f, i) => (
+                    <p key={i} className="text-[11px] text-green-300/70 font-mono">{f.path}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Drop zone */}
         {!results && (

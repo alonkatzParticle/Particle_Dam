@@ -78,9 +78,58 @@ export const AI_TAGS = [
   { id: 'neutral-expr',  label: 'Neutral Expression',  category: 'Emotion', color: '#94a3b8' },
 ]
 
-export const AI_TAG_CATEGORIES = [...new Set(AI_TAGS.map(t => t.category))]
-
+// Subject is pinned first — it's the most-used filter in the raw library
+const CATEGORY_ORDER = ['Subject', 'Style', 'Age', 'Setting', 'Mood', 'Shot', 'Emotion']
+export const AI_TAG_CATEGORIES = [
+  ...CATEGORY_ORDER.filter(c => AI_TAGS.some(t => t.category === c)),
+  ...[...new Set(AI_TAGS.map(t => t.category))].filter(c => !CATEGORY_ORDER.includes(c)),
+]
 export const AI_TAG_MAP = Object.fromEntries(AI_TAGS.map(t => [t.id, t]))
+
+// Brand Kit taxonomy
+export const BRAND_AI_TAGS = [
+  { id: 'b-logo',           label: 'Logo',          category: 'Asset Type', color: '#6366f1' },
+  { id: 'b-3d-model',       label: '3D Model',      category: 'Asset Type', color: '#06b6d4' },
+  { id: 'b-texture',        label: 'Texture',        category: 'Asset Type', color: '#22d3ee' },
+  { id: 'b-background',     label: 'Background',     category: 'Asset Type', color: '#67e8f9' },
+  { id: 'b-project-file',   label: 'Project File',   category: 'Asset Type', color: '#94a3b8' },
+  { id: 'b-archive',        label: 'Archive',        category: 'Asset Type', color: '#64748b' },
+  { id: 'b-horizontal',     label: 'Horizontal',     category: 'Format',     color: '#f59e0b' },
+  { id: 'b-vertical',       label: 'Vertical',       category: 'Format',     color: '#fbbf24' },
+  { id: 'b-square',         label: 'Square',         category: 'Format',     color: '#fcd34d' },
+  { id: 'b-icon-size',      label: 'Icon',           category: 'Format',     color: '#fde68a' },
+  { id: 'b-full-color',     label: 'Full Color',     category: 'Color Mode', color: '#10b981' },
+  { id: 'b-monochrome',     label: 'Monochrome',     category: 'Color Mode', color: '#6ee7b7' },
+  { id: 'b-white',          label: 'White',          category: 'Color Mode', color: '#e2e8f0' },
+  { id: 'b-black',          label: 'Black',          category: 'Color Mode', color: '#94a3b8' },
+  { id: 'b-outline',        label: 'Outline',        category: 'Color Mode', color: '#cbd5e1' },
+  { id: 'b-brand-particle', label: 'Particle',       category: 'Brand',      color: '#f97316' },
+  { id: 'b-brand-gravite',  label: 'Gravité',        category: 'Brand',      color: '#ec4899' },
+  { id: 'b-brand-gt',       label: 'GT',             category: 'Brand',      color: '#a855f7' },
+  { id: 'b-prod-face-cream',    label: 'Face Cream',   category: 'Product',  color: '#84cc16' },
+  { id: 'b-prod-body-wash',     label: 'Body Wash',    category: 'Product',  color: '#a3e635' },
+  { id: 'b-prod-face-mask',     label: 'Face Mask',    category: 'Product',  color: '#bef264' },
+  { id: 'b-prod-hair-gummies',  label: 'Hair Gummies', category: 'Product',  color: '#4ade80' },
+  { id: 'b-prod-skin-gummies',  label: 'Skin Gummies', category: 'Product',  color: '#34d399' },
+  { id: 'b-prod-deodorant',     label: 'Deodorant',    category: 'Product',  color: '#2dd4bf' },
+  { id: 'b-prod-neck-cream',    label: 'Neck Cream',   category: 'Product',  color: '#22d3ee' },
+  { id: 'b-prod-shampoo',       label: 'Shampoo',      category: 'Product',  color: '#38bdf8' },
+  { id: 'b-prod-shaving-gel',   label: 'Shaving Gel',  category: 'Product',  color: '#60a5fa' },
+  { id: 'b-prod-sunscreen',     label: 'Sunscreen',    category: 'Product',  color: '#818cf8' },
+  { id: 'b-prod-face-wash',     label: 'Face Wash',    category: 'Product',  color: '#a78bfa' },
+  { id: 'b-prod-hand-cream',    label: 'Hand Cream',   category: 'Product',  color: '#c084fc' },
+  { id: 'b-prod-lip-balm',      label: 'Lip Balm',     category: 'Product',  color: '#e879f9' },
+  { id: 'b-prod-eye-cream',     label: 'Eye Cream',    category: 'Product',  color: '#f472b6' },
+  { id: 'b-prod-ab-cream',      label: 'Ab Firming',   category: 'Product',  color: '#fb7185' },
+  { id: 'b-prod-bundle',        label: 'Bundle',       category: 'Product',  color: '#f59e0b' },
+  { id: 'b-status-current',     label: 'Current',      category: 'Status',   color: '#10b981' },
+  { id: 'b-status-approval',    label: 'For Approval', category: 'Status',   color: '#f59e0b' },
+  { id: 'b-status-legacy',      label: 'Legacy',       category: 'Status',   color: '#94a3b8' },
+]
+export const BRAND_AI_TAG_CATEGORIES = [...new Set(BRAND_AI_TAGS.map(t => t.category))]
+
+// Merged map — covers both raw/ads and brand tags for card display
+Object.assign(AI_TAG_MAP, Object.fromEntries(BRAND_AI_TAGS.map(t => [t.id, t])))
 
 export function parseAiTags(jsonStr) {
   if (!jsonStr) return []

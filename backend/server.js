@@ -21,7 +21,8 @@ const makeSync           = require('./makeSync');
 const { getAuthUrl, handleCallback, requireAuth, requireAdmin, FRONTEND_URL, JWT_SECRET } = require('./auth');
 const makeUploadWatcher  = require('./makeUploadWatcher');
 const { getTemporaryLink, getThumbnailResponse, getSharedLink, uploadToDropbox,
-        isThumbnailable, getDropboxToken, encodeDropboxArg } = require('./dropbox_lib');
+        isThumbnailable, getDropboxToken, encodeDropboxArg,
+        moveDropboxFile, createDropboxFolder } = require('./dropbox_lib');
 const { runMondaySync, getMondaySyncStatus, resolveDropboxPaths } = require('./monday_sync');
 const { computeEmbedding, cosineSimilarity } = require('./embeddings');
 const { extractVideoFrames } = require('./ffmpeg_lib');
@@ -199,7 +200,9 @@ function mountAssetRoutes(prefix, db, opts = {}) {
   app.get(`${prefix}/assets`, (req, res) => {
     try {
       const { search = '', tags = '', ext = '', ai_tags = '', untagged = '',
-              monday_linked = '', container_name = '', content_type = '', sort = 'newest', page = '1', limit = '60' } = req.query;
+              monday_linked = '', container_name = '', content_type = '',
+              platform = '', campaign = '', monday_product = '',
+              sort = 'newest', page = '1', limit = '60' } = req.query;
       // Fast single-asset lookup by dropbox_id (used for deep-link URL restore)
       if (req.query.dropbox_id) {
         const asset = db.db.prepare('SELECT * FROM assets WHERE dropbox_id = ?').get(req.query.dropbox_id);
@@ -213,8 +216,11 @@ function mountAssetRoutes(prefix, db, opts = {}) {
         aiTags:        ai_tags ? ai_tags.split(',').filter(Boolean) : [],
         untagged:      untagged === 'true',
         mondayLinked:  monday_linked === 'true' ? true : monday_linked === 'false' ? false : null,
-        containerName: container_name || null,
-        contentType:   content_type   || null,
+        containerName: container_name  || null,
+        contentType:   content_type    || null,
+        platform:      platform        || null,
+        campaign:      campaign        || null,
+        mondayProduct: monday_product  || null,
         sort,
         page:  parseInt(page)  || 1,
         limit: parseInt(limit) || 60,
@@ -256,6 +262,26 @@ function mountAssetRoutes(prefix, db, opts = {}) {
       const asset = db.db.prepare('SELECT * FROM assets WHERE id = ? OR dropbox_id = ?')
         .get(req.params.id, req.params.id);
       if (!asset) return res.status(404).end();
+
+      const ext = (asset.extension || '').toLowerCase();
+
+      // SVG & PNG: download raw file — browser renders with true transparency
+      if (ext === 'svg' || ext === 'png') {
+        const token = await getDropboxToken();
+        const rawRes = await fetch('https://content.dropboxapi.com/2/files/download', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Dropbox-API-Arg': encodeDropboxArg({ path: asset.path }),
+          },
+        });
+        if (!rawRes.ok) return res.status(204).end();
+        res.setHeader('Content-Type', ext === 'svg' ? 'image/svg+xml' : 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        const { Readable } = require('stream');
+        return Readable.fromWeb(rawRes.body).pipe(res);
+      }
+
       if (!isThumbnailable(asset.extension)) return res.status(204).end();
       const dropboxRes = await getThumbnailResponse(asset.path, req.query.size || 'w960h640');
       if (!dropboxRes) return res.status(204).end();
@@ -497,6 +523,104 @@ app.get('/api/ads/monday/tasks', (_req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Dynamic platform + campaign lists from Monday data
+app.get('/api/ads/monday/platforms', (_req, res) => {
+  try {
+    const rows = ads.db.prepare(`SELECT DISTINCT platform FROM monday_tasks WHERE platform IS NOT NULL AND platform != '' ORDER BY platform ASC`).all();
+    res.json(rows.map(r => r.platform));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/ads/monday/campaigns', (_req, res) => {
+  try {
+    const rows = ads.db.prepare(`SELECT DISTINCT campaign FROM monday_tasks WHERE campaign IS NOT NULL AND campaign != '' ORDER BY campaign ASC`).all();
+    res.json(rows.map(r => r.campaign));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/ads/monday/products', (_req, res) => {
+  try {
+    const rows = ads.db.prepare(`SELECT DISTINCT product FROM monday_tasks WHERE product IS NOT NULL AND product != '' ORDER BY product ASC`).all();
+    res.json(rows.map(r => r.product));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Asset use-count tracking (Raw + Brand)
+app.post('/api/raw/assets/:id/use', (req, res) => {
+  try {
+    raw.db.prepare('UPDATE assets SET use_count = COALESCE(use_count, 0) + 1 WHERE id = ?').run(parseInt(req.params.id));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/brand/assets/:id/use', (req, res) => {
+  try {
+    brand.db.prepare('UPDATE assets SET use_count = COALESCE(use_count, 0) + 1 WHERE id = ?').run(parseInt(req.params.id));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Real/AI toggle: move file in Dropbox and update DB ───────────────────────
+app.patch('/api/raw/assets/:id/content-type', async (req, res) => {
+  try {
+    const { content_type } = req.body || {};
+    if (!['ai', 'real'].includes(content_type)) {
+      return res.status(400).json({ error: 'content_type must be "ai" or "real"' });
+    }
+    const asset = raw.db.prepare('SELECT * FROM assets WHERE id = ?').get(parseInt(req.params.id));
+    if (!asset) return res.status(404).json({ error: 'Asset not found' });
+    if (!asset.path) return res.status(400).json({ error: 'Asset has no path' });
+
+    // Replace the /AI/ or /Real/ segment (case-insensitive) with the target folder
+    const fromLabel = content_type === 'ai' ? 'Real' : 'AI';
+    const toLabel   = content_type === 'ai' ? 'AI'   : 'Real';
+    const fromPath  = asset.path;
+
+    // Match /AI/ or /Real/ anywhere in the path (case-insensitive)
+    const regex = new RegExp(`/${fromLabel}/`, 'i');
+    if (!regex.test(fromPath)) {
+      return res.status(400).json({ error: `Path does not contain /${fromLabel}/ segment` });
+    }
+
+    const toPath = fromPath.replace(regex, `/${toLabel}/`);
+
+    // Move in Dropbox
+    await moveDropboxFile(fromPath, toPath);
+
+    // Update DB
+    raw.db.prepare('UPDATE assets SET path = ?, content_type = ? WHERE id = ?')
+      .run(toPath, content_type, asset.id);
+
+    res.json({ ok: true, path: toPath, content_type });
+  } catch (err) {
+    console.error('[content-type toggle]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Create product folder with full AI/Real/CTA hierarchy ────────────────────
+// When a new product is created in the uploader, mirror the subfolder structure
+app.post('/api/raw/folders', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
+    const safeName   = name.trim();
+    const productDir = `${RAW_ROOT}/Products/${safeName}`;
+    const subfolders = ['Real', 'AI', 'CTA'];
+
+    const created = [];
+    for (const sub of subfolders) {
+      const result = await createDropboxFolder(`${productDir}/${sub}`);
+      created.push({ path: `${productDir}/${sub}`, ...result });
+    }
+
+    res.json({ ok: true, product: safeName, folders: created });
+  } catch (err) {
+    console.error('[create folders]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.patch('/api/ads/assets/:id/monday-link', (req, res) => {
   try {
     const { monday_id } = req.body || {};
@@ -547,7 +671,7 @@ app.post('/api/ads/tag-jobs', (req, res) => {
   if (adsTagJob?.status === 'running') return res.status(409).json({ error: 'A job is already running' });
   const { ids } = req.body || {};
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids array required' });
-  runTagJob(ids, ads, job => { adsTagJob = job; }).catch(err => console.error('[BulkTag]', err.message));
+  runTagJob(ids, ads, job => { adsTagJob = job; }, ADS_AI_TAXONOMY).catch(err => console.error('[BulkTag]', err.message));
   res.json({ ok: true, total: ids.length });
 });
 app.get('/api/ads/tag-jobs/status', (_req, res) => res.json(adsTagJob || { status: 'idle' }));
@@ -555,6 +679,50 @@ app.delete('/api/ads/tag-jobs', (_req, res) => { if (adsTagJob?.status === 'runn
 
 // ─── Shared: AI taxonomy + embedding logic ────────────────────────────────────
 
+// ── Final Assets (Ads) taxonomy ───────────────────────────────────────────────
+const ADS_AI_TAXONOMY = [
+  // Platform
+  { id: 'ad-plat-tiktok',    label: 'TikTok',           category: 'Platform' },
+  { id: 'ad-plat-instagram', label: 'Instagram',         category: 'Platform' },
+  { id: 'ad-plat-facebook',  label: 'Facebook',          category: 'Platform' },
+  { id: 'ad-plat-youtube',   label: 'YouTube',           category: 'Platform' },
+  { id: 'ad-plat-pinterest', label: 'Pinterest',         category: 'Platform' },
+  { id: 'ad-plat-email',     label: 'Email',             category: 'Platform' },
+  // Format
+  { id: 'ad-fmt-story',      label: 'Story (9:16)',      category: 'Format' },
+  { id: 'ad-fmt-feed',       label: 'Feed (1:1)',        category: 'Format' },
+  { id: 'ad-fmt-landscape',  label: 'Landscape (16:9)', category: 'Format' },
+  { id: 'ad-fmt-reel',       label: 'Reel',              category: 'Format' },
+  // Ad Type
+  { id: 'ad-type-ugc',         label: 'UGC',            category: 'Ad Type' },
+  { id: 'ad-type-studio',      label: 'Studio',         category: 'Ad Type' },
+  { id: 'ad-type-testimonial', label: 'Testimonial',    category: 'Ad Type' },
+  { id: 'ad-type-demo',        label: 'Demo',           category: 'Ad Type' },
+  { id: 'ad-type-lifestyle',   label: 'Lifestyle',      category: 'Ad Type' },
+  { id: 'ad-type-animation',   label: 'Animation',      category: 'Ad Type' },
+  { id: 'ad-type-product',     label: 'Product Shot',   category: 'Ad Type' },
+  // Hook / Angle
+  { id: 'ad-hook-problem',     label: 'Problem / Solution', category: 'Hook' },
+  { id: 'ad-hook-before-after',label: 'Before & After',     category: 'Hook' },
+  { id: 'ad-hook-stats',       label: 'Stats & Proof',      category: 'Hook' },
+  { id: 'ad-hook-howto',       label: 'How-To',             category: 'Hook' },
+  { id: 'ad-hook-social',      label: 'Social Proof',       category: 'Hook' },
+  { id: 'ad-hook-lifestyle',   label: 'Lifestyle Hook',     category: 'Hook' },
+  // Phase
+  { id: 'ad-phase-awareness',  label: 'Awareness',      category: 'Phase' },
+  { id: 'ad-phase-consider',   label: 'Consideration',  category: 'Phase' },
+  { id: 'ad-phase-convert',    label: 'Conversion',     category: 'Phase' },
+  { id: 'ad-phase-retarget',   label: 'Retargeting',    category: 'Phase' },
+  // CTA
+  { id: 'ad-cta-shop',        label: 'Shop Now',        category: 'CTA' },
+  { id: 'ad-cta-learn',       label: 'Learn More',      category: 'CTA' },
+  { id: 'ad-cta-try',         label: 'Try Free',        category: 'CTA' },
+  { id: 'ad-cta-discover',    label: 'Discover',        category: 'CTA' },
+  { id: 'ad-cta-subscribe',   label: 'Subscribe',       category: 'CTA' },
+];
+const VALID_ADS_TAG_IDS = new Set(ADS_AI_TAXONOMY.map(t => t.id));
+
+// ── Raw Files taxonomy ────────────────────────────────────────────────────────
 const AI_TAXONOMY = [
   { id: 'ugc',           label: 'UGC',                 category: 'Style' },
   { id: 'professional',  label: 'Professional',        category: 'Style' },
@@ -612,20 +780,245 @@ const AI_TAXONOMY = [
   { id: 'relaxed',       label: 'Relaxed',             category: 'Emotion' },
   { id: 'aspirational',  label: 'Aspirational',        category: 'Emotion' },
   { id: 'neutral-expr',  label: 'Neutral Expression',  category: 'Emotion' },
+  // Content Type
+  { id: 'before-after',  label: 'Before & After',      category: 'Content Type' },
+  { id: 'transformation',label: 'Transformation',      category: 'Content Type' },
+  { id: 'tutorial',      label: 'Tutorial / How-To',   category: 'Content Type' },
+  { id: 'review',        label: 'Review',              category: 'Content Type' },
+  { id: 'unboxing',      label: 'Unboxing',            category: 'Content Type' },
 ];
 const VALID_TAG_IDS = new Set(AI_TAXONOMY.map(t => t.id));
 
-app.get('/api/raw/ai-tags/taxonomy', (_req, res) => res.json(AI_TAXONOMY));
-app.get('/api/ads/ai-tags/taxonomy', (_req, res) => res.json(AI_TAXONOMY));
+// ─── Brand Kit taxonomy ────────────────────────────────────────────────────────
+const BRAND_AI_TAXONOMY = [
+  // Asset Type
+  { id: 'b-logo',        label: 'Logo',          category: 'Asset Type' },
+  { id: 'b-3d-model',    label: '3D Model',       category: 'Asset Type' },
+  { id: 'b-texture',     label: 'Texture',        category: 'Asset Type' },
+  { id: 'b-background',  label: 'Background',     category: 'Asset Type' },
+  { id: 'b-project-file',label: 'Project File',   category: 'Asset Type' },
+  { id: 'b-archive',     label: 'Archive',        category: 'Asset Type' },
+  // Format
+  { id: 'b-horizontal',  label: 'Horizontal',     category: 'Format' },
+  { id: 'b-vertical',    label: 'Vertical',       category: 'Format' },
+  { id: 'b-square',      label: 'Square',         category: 'Format' },
+  { id: 'b-icon-size',   label: 'Icon',           category: 'Format' },
+  // Color Mode
+  { id: 'b-full-color',  label: 'Full Color',     category: 'Color Mode' },
+  { id: 'b-monochrome',  label: 'Monochrome',     category: 'Color Mode' },
+  { id: 'b-white',       label: 'White',          category: 'Color Mode' },
+  { id: 'b-black',       label: 'Black',          category: 'Color Mode' },
+  { id: 'b-outline',     label: 'Outline',        category: 'Color Mode' },
+  // Brand
+  { id: 'b-brand-particle', label: 'Particle',    category: 'Brand' },
+  { id: 'b-brand-gravite',  label: 'Gravité',     category: 'Brand' },
+  { id: 'b-brand-gt',       label: 'GT',          category: 'Brand' },
+  // Product
+  { id: 'b-prod-face-cream',    label: 'Face Cream',    category: 'Product' },
+  { id: 'b-prod-body-wash',     label: 'Body Wash',     category: 'Product' },
+  { id: 'b-prod-face-mask',     label: 'Face Mask',     category: 'Product' },
+  { id: 'b-prod-hair-gummies',  label: 'Hair Gummies',  category: 'Product' },
+  { id: 'b-prod-skin-gummies',  label: 'Skin Gummies',  category: 'Product' },
+  { id: 'b-prod-deodorant',     label: 'Deodorant',     category: 'Product' },
+  { id: 'b-prod-neck-cream',    label: 'Neck Cream',    category: 'Product' },
+  { id: 'b-prod-shampoo',       label: 'Shampoo',       category: 'Product' },
+  { id: 'b-prod-shaving-gel',   label: 'Shaving Gel',   category: 'Product' },
+  { id: 'b-prod-sunscreen',     label: 'Sunscreen',     category: 'Product' },
+  { id: 'b-prod-face-wash',     label: 'Face Wash',     category: 'Product' },
+  { id: 'b-prod-hand-cream',    label: 'Hand Cream',    category: 'Product' },
+  { id: 'b-prod-lip-balm',      label: 'Lip Balm',      category: 'Product' },
+  { id: 'b-prod-eye-cream',     label: 'Eye Cream',     category: 'Product' },
+  { id: 'b-prod-ab-cream',      label: 'Ab Firming',    category: 'Product' },
+  { id: 'b-prod-bundle',        label: 'Bundle',        category: 'Product' },
+  // Status
+  { id: 'b-status-current',     label: 'Current',       category: 'Status' },
+  { id: 'b-status-approval',    label: 'For Approval',  category: 'Status' },
+  { id: 'b-status-legacy',      label: 'Legacy',        category: 'Status' },
+];
+const VALID_BRAND_TAG_IDS = new Set(BRAND_AI_TAXONOMY.map(t => t.id));
 
-async function tagSingleAsset(assetId, db) {
+app.get('/api/raw/ai-tags/taxonomy',   (_req, res) => res.json(AI_TAXONOMY));
+app.get('/api/ads/ai-tags/taxonomy',   (_req, res) => res.json(ADS_AI_TAXONOMY));
+app.get('/api/brand/ai-tags/taxonomy', (_req, res) => res.json(BRAND_AI_TAXONOMY));
+
+// ─── Folder-based tag inference for brand assets ─────────────────────────────
+function inferBrandTagsFromPath(path, ext) {
+  const lower   = path.toLowerCase();
+  const parts   = lower.split('/').filter(Boolean);
+  const tags    = new Set();
+
+  // Asset Type from top-level design folder
+  if (parts.includes('logos') || parts.some(p => p.includes('animated logo'))) {
+    tags.add('b-logo');
+  } else if (parts.includes('3d models') || parts.some(p => p === '3d models')) {
+    // Check if it's a texture (inside /tex/ folder or specific image extension inside 3D hierarchy)
+    if (parts.includes('tex') || parts.some(p => p === 'tex')) {
+      tags.add('b-texture');
+    } else if (['c4d','blend','obj','fbx','abc','mtl'].includes(ext)) {
+      tags.add('b-project-file');
+    } else if (['zip','rar','7z'].includes(ext)) {
+      tags.add('b-archive');
+    } else {
+      tags.add('b-3d-model');
+    }
+  } else if (parts.includes('backgrounds')) {
+    tags.add('b-background');
+  }
+
+  // Override asset type by extension if more specific
+  if (['c4d','blend','obj','fbx','abc','mtl','ksp'].includes(ext) && !tags.has('b-texture')) {
+    tags.delete('b-3d-model'); tags.add('b-project-file');
+  }
+  if (['zip','rar','7z'].includes(ext)) {
+    tags.delete('b-3d-model'); tags.add('b-archive');
+  }
+
+  // Brand from subfolder name
+  if (parts.some(p => p === 'gt' || p.startsWith('gt '))) {
+    tags.add('b-brand-gt');
+  } else if (parts.some(p => p.includes('gravit') || p.includes('gravité'))) {
+    tags.add('b-brand-gravite');
+  } else {
+    tags.add('b-brand-particle');
+  }
+
+  // Product — from 3D Models/Products/<name>/...
+  const prodIdx = parts.indexOf('products');
+  if (prodIdx >= 0 && parts[prodIdx + 1]) {
+    const prod = parts[prodIdx + 1];
+    const prodMap = {
+      'ab firming cream': 'b-prod-ab-cream',
+      'body wash':        'b-prod-body-wash',
+      'deodorant':        'b-prod-deodorant',
+      'face cream':       'b-prod-face-cream',
+      'face mask':        'b-prod-face-mask',
+      'face wash':        'b-prod-face-wash',
+      'hair gummies':     'b-prod-hair-gummies',
+      'hand cream':       'b-prod-hand-cream',
+      'instant eye firming cream': 'b-prod-eye-cream',
+      'lip balm':         'b-prod-lip-balm',
+      'neck cream':       'b-prod-neck-cream',
+      'shampoo':          'b-prod-shampoo',
+      'shaving gel':      'b-prod-shaving-gel',
+      'skin gummies':     'b-prod-skin-gummies',
+      'starter bundle':   'b-prod-bundle',
+      'sunscreen':        'b-prod-sunscreen',
+      'gravite':          null, // brand tag already added above
+    };
+    const tagId = Object.entries(prodMap).find(([key]) => prod.includes(key))?.[1];
+    if (tagId) tags.add(tagId);
+  }
+
+  // Bundles folder
+  if (parts.includes('bundles')) tags.add('b-prod-bundle');
+
+  // Status
+  if (lower.includes('for approval')) {
+    tags.add('b-status-approval');
+  } else if (lower.includes('/old') || lower.includes('old (') || lower.includes('(old)') || lower.includes('bagus')) {
+    tags.add('b-status-legacy');
+  } else {
+    tags.add('b-status-current');
+  }
+
+  return [...tags].filter(t => VALID_BRAND_TAG_IDS.has(t));
+}
+
+// Extensions Claude vision can process
+const VISION_EXTS = new Set(['jpg','jpeg','png','gif','webp','tiff','bmp']);
+const VIDEO_EXTS  = new Set(['mp4','mov','avi','mkv','webm','mxf','m4v']);
+
+async function tagSingleAsset(assetId, db, taxonomy = null) {
+  const usedTaxonomy = taxonomy || AI_TAXONOMY;
+  const usedValidIds = new Set(usedTaxonomy.map(t => t.id));
+  const isBrand      = usedTaxonomy === BRAND_AI_TAXONOMY;
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   const asset = db.db.prepare('SELECT * FROM assets WHERE id = ?').get(assetId);
   if (!asset) throw new Error('Asset not found');
 
+  const ext      = (asset.extension || '').toLowerCase();
+  const isVideo  = VIDEO_EXTS.has(ext);
+  const isVisual = VISION_EXTS.has(ext);
+  const isSvg    = ext === 'svg';
+
+  // ── Deterministic text → taxonomy tag mapper ─────────────────────────────
+  function tagsFromDetectedText(text) {
+    if (!text) return [];
+    const t = text.toLowerCase();
+    const extra = [];
+    if (t.includes('particle'))                           extra.push('b-brand-particle');
+    if (t.includes('gravit') || t.includes('gravit\u00e9'))    extra.push('b-brand-gravite');
+    if (/\bgt\b/.test(t))                                 extra.push('b-brand-gt');
+    if (t.includes('face cream'))   extra.push('b-prod-face-cream');
+    if (t.includes('body wash'))    extra.push('b-prod-body-wash');
+    if (t.includes('face mask'))    extra.push('b-prod-face-mask');
+    if (t.includes('hair gum'))     extra.push('b-prod-hair-gummies');
+    if (t.includes('skin gum'))     extra.push('b-prod-skin-gummies');
+    if (t.includes('deodorant'))    extra.push('b-prod-deodorant');
+    if (t.includes('neck cream'))   extra.push('b-prod-neck-cream');
+    if (t.includes('shampoo'))      extra.push('b-prod-shampoo');
+    if (t.includes('shaving gel') || t.includes('shave gel')) extra.push('b-prod-shaving-gel');
+    if (t.includes('sunscreen') || t.includes('spf'))    extra.push('b-prod-sunscreen');
+    if (t.includes('face wash'))    extra.push('b-prod-face-wash');
+    if (t.includes('hand cream'))   extra.push('b-prod-hand-cream');
+    if (t.includes('lip balm'))     extra.push('b-prod-lip-balm');
+    if (t.includes('eye cream') || t.includes('eye firm')) extra.push('b-prod-eye-cream');
+    if (t.includes('ab firm') || t.includes('ab cream'))   extra.push('b-prod-ab-cream');
+    return [...new Set(extra)].filter(id => usedValidIds.has(id));
+  }
+
+
+  const tagList = usedTaxonomy.map(t => `"${t.id}" — ${t.label} (category: ${t.category})`).join('\n');
+  const context = isBrand
+    ? "You are tagging a brand design asset (logo, 3D model, texture, background, etc.) for a men's skincare brand called Particle. Use the filename and folder path as strong hints."
+    : "You are analyzing a creative video/photo asset for a men's skincare brand.";
+
+  // ── Branch 1: Brand non-visual, non-SVG, non-video → folder tags only ──────
+  if (isBrand && !isVisual && !isVideo && !isSvg) {
+    // Read existing AI tags and merge with folder inference (never delete existing)
+    let existing = [];
+    try { existing = JSON.parse(asset.ai_tags || '[]'); } catch {}
+    const folderT = inferBrandTagsFromPath(asset.path, ext);
+    const tags = [...new Set([...existing, ...folderT])];
+    const desc = asset.ai_description || `Auto-tagged from folder: ${asset.path.split('/').slice(-3, -1).join(' › ')}`;
+    db.assetOps.setAiContent(asset.id, { tags, actions: [], description: desc });
+    console.log(`[AI Tags] ${asset.name}: folder tags=[${tags}]`);
+    return { tags, actions: [], description: desc };
+  }
+
+  // ── Branch 2: SVG → text-only Claude (vision can't read SVG) ───────────────
+  if (isSvg) {
+    let existing = [];
+    try { existing = JSON.parse(asset.ai_tags || '[]'); } catch {}
+    const folderTags = isBrand ? inferBrandTagsFromPath(asset.path, ext) : [];
+    const client = new Anthropic({ apiKey });
+    let aiTags = [], desc = '';
+    try {
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 256,
+        messages: [{ role: 'user', content:
+          `${context}\n\nFilename: "${asset.name}"\nFile path: "${asset.path}"\nFile type: SVG vector graphic\n\nAvailable taxonomy tags:\n${tagList}\n\nBased on the filename and path (you cannot see the file), reply with ONLY a JSON object: {"tags": [...], "description": "..."}` }],
+      });
+      const raw = response.content[0]?.text?.trim() || '{}';
+      const parsed = JSON.parse(raw.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim());
+      aiTags = Array.isArray(parsed.tags) ? parsed.tags.filter(t => usedValidIds.has(t)) : [];
+      desc   = typeof parsed.description === 'string' ? parsed.description.slice(0, 200) : '';
+    } catch { /* if Claude fails, folder tags are sufficient */ }
+    const tags = [...new Set([...existing, ...folderTags, ...aiTags])];
+    db.assetOps.setAiContent(asset.id, { tags, actions: [], description: desc });
+    console.log(`[AI Tags] ${asset.name}: svg tags=[${tags}]`);
+    return { tags, actions: [], description: desc };
+  }
+
+  // ── Branch 3: Visual / video → Claude vision + merge with ALL existing tags ─
+  let existing = [];
+  try { existing = JSON.parse(asset.ai_tags || '[]'); } catch {}
+  const folderTags = isBrand ? inferBrandTagsFromPath(asset.path, ext) : [];
   let imageBlocks = [];
-  const isVideo = ['mp4','mov','avi','mkv','webm','mxf','m4v'].includes(asset.extension?.toLowerCase());
+
   if (isVideo) {
     const cachedUrl = db.linkOps.get(asset.path);
     const videoUrl  = cachedUrl || await getTemporaryLink(asset.path);
@@ -634,30 +1027,36 @@ async function tagSingleAsset(assetId, db) {
     if (!frames.length) throw new Error('Could not extract frames from video');
     imageBlocks = frames.map(buf => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buf.toString('base64') } }));
   } else {
-    if (!isThumbnailable(asset.extension)) throw new Error('No thumbnail available for this file type');
+    // isVisual (jpg/png/gif/webp/tiff/bmp)
     const thumbRes = await getThumbnailResponse(asset.path, 'w960h640');
     if (!thumbRes) throw new Error('Could not fetch thumbnail from Dropbox');
     imageBlocks = [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(await thumbRes.arrayBuffer()).toString('base64') } }];
   }
 
-  const tagList = AI_TAXONOMY.map(t => `"${t.id}" — ${t.label} (category: ${t.category})`).join('\n');
-  const client  = new Anthropic({ apiKey });
+  const client   = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 512,
-    messages: [{ role: 'user', content: [...imageBlocks, { type: 'text', text: `You are analyzing a creative asset.\n\nFilename: "${asset.name}"\n\nAvailable taxonomy tags:\n${tagList}\n\nReply with a JSON object: {"tags": [...], "actions": [...], "description": "..."}` }] }],
+    max_tokens: 600,
+    messages: [{ role: 'user', content: [...imageBlocks, { type: 'text', text:
+      `${context}\n\nFilename: "${asset.name}"\nFile path: "${asset.path}"\n\nIMPORTANT: Carefully read ALL text visible in the image (brand names, product names, slogans, labels). Put every word/phrase you can read in detected_text.\n\nAvailable taxonomy tags:\n${tagList}\n\nReply with a JSON object: {"tags": [...], "actions": [...], "description": "...", "detected_text": "<all visible text separated by spaces>"}` }] }],
   });
   const raw2    = response.content[0]?.text?.trim() || '{}';
   const parsed  = JSON.parse(raw2.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim());
-  const tags    = Array.isArray(parsed.tags)    ? parsed.tags.filter(t => VALID_TAG_IDS.has(t)) : [];
+  const aiTags  = Array.isArray(parsed.tags)    ? parsed.tags.filter(t => usedValidIds.has(t)) : [];
   const actions = Array.isArray(parsed.actions) ? parsed.actions.filter(a => typeof a === 'string').slice(0, 5) : [];
-  const desc    = typeof parsed.description === 'string' ? parsed.description.slice(0, 200) : '';
+  const detectedText = typeof parsed.detected_text === 'string' && parsed.detected_text.trim()
+    ? parsed.detected_text.trim() : '';
+  const textTags = isBrand ? tagsFromDetectedText(detectedText) : [];
+  const baseDesc = typeof parsed.description === 'string' ? parsed.description.slice(0, 200) : '';
+  const desc = detectedText ? `${baseDesc}${baseDesc ? ' · ' : ''}Text: ${detectedText}`.slice(0, 300) : baseDesc;
+  // Merge: existing DB tags + folder-inferred + Claude AI + text-derived (never delete)
+  const tags = [...new Set([...existing, ...folderTags, ...aiTags, ...textTags])];
   db.assetOps.setAiContent(asset.id, { tags, actions, description: desc });
-  console.log(`[AI Tags] ${asset.name}: tags=[${tags}]`);
+  console.log(`[AI Tags] ${asset.name}: tags=[${tags}] text="${detectedText}"`);
   return { tags, actions, description: desc };
 }
 
-async function runTagJob(ids, db, setJob) {
+async function runTagJob(ids, db, setJob, taxonomy = null) {
   const job = { status: 'running', total: ids.length, done: 0, errors: 0, currentId: null, currentName: null, ids, results: {}, startedAt: new Date().toISOString() };
   setJob(job);
   for (const id of ids) {
@@ -666,7 +1065,7 @@ async function runTagJob(ids, db, setJob) {
     job.currentName = db.db.prepare('SELECT name FROM assets WHERE id = ?').get(id)?.name || null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await tagSingleAsset(id, db);
+        await tagSingleAsset(id, db, taxonomy);
         job.results[id] = 'done'; job.done++; break;
       } catch (err) {
         const transient = err.message?.includes('500') || err.message?.includes('529') || err.message?.includes('overloaded');
@@ -680,30 +1079,150 @@ async function runTagJob(ids, db, setJob) {
   job.finishedAt = new Date().toISOString();
 }
 
+// Brand tag-jobs
+let brandTagJob = null;
+app.post('/api/brand/tag-jobs', (req, res) => {
+  if (brandTagJob?.status === 'running') return res.status(409).json({ error: 'A job is already running' });
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids array required' });
+  runTagJob(ids, brand, job => { brandTagJob = job; }, BRAND_AI_TAXONOMY).catch(err => console.error('[BrandBulkTag]', err.message));
+  res.json({ ok: true, total: ids.length });
+});
+app.get('/api/brand/tag-jobs/status', (_req, res) => res.json(brandTagJob || { status: 'idle' }));
+app.delete('/api/brand/tag-jobs', (_req, res) => { if (brandTagJob?.status === 'running') brandTagJob.cancelled = true; res.json({ ok: true }); });
+
+// Brand single-asset AI tag (via mountAssetRoutes already wires /api/brand/assets/:id/ai-tags/generate)
+// Override it to use brand taxonomy
+app.post('/api/brand/assets/:id/ai-tags/generate', async (req, res) => {
+  try {
+    const result = await tagSingleAsset(req.params.id, brand, BRAND_AI_TAXONOMY);
+    res.json({ ok: true, ...result, ai_tagged_at: new Date().toISOString() });
+  } catch (err) {
+    console.error('[brand ai-tags/generate]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Shared: compute embeddings on startup ────────────────────────────────────
 
 function buildSearchCorpus(asset, allTags) {
-  const parts = [asset.name];
-  if (asset.ai_description) parts.push(asset.ai_description);
-  if (asset.ai_actions) { try { parts.push(...JSON.parse(asset.ai_actions)); } catch {} }
-  if (asset.ai_tags) { try { const ids = JSON.parse(asset.ai_tags); parts.push(...ids); } catch {} }
+  const parts = [];
+
+  // ── 1. File name (most unique identifier) — add twice for weight
+  if (asset.name) {
+    parts.push(asset.name);
+    // Also add name without extension to catch stem searches
+    const stem = asset.name.replace(/\.[^.]+$/, '');
+    if (stem !== asset.name) { parts.push(stem); parts.push(stem); }
+    else parts.push(asset.name);
+  }
+
+  // ── 2. Unique folder segments (skip generic ones that appear in every path)
+  const SKIP_FOLDERS = new Set(['brand', 'logos', 'assets', 'dam', 'creative', 'dropbox', 'particle', '2026']);
+  if (asset.path) {
+    const segs = asset.path.split('/').filter(s => s && !SKIP_FOLDERS.has(s.toLowerCase()));
+    parts.push(...segs);
+  }
+
+  // ── 3. Extension
+  if (asset.extension) parts.push(asset.extension);
+
+  // ── 4. AI description — split detected text out, add separately
+  if (asset.ai_description) {
+    const m = asset.ai_description.match(/·\s*Text:\s*(.+)$/);
+    if (m) {
+      const cleanDesc = asset.ai_description.replace(/\s*·\s*Text:\s*.+$/, '').trim();
+      if (cleanDesc) parts.push(cleanDesc);
+      const detected = m[1].trim();
+      parts.push(detected);
+      parts.push(detected); // repeat detected text for higher weight
+    } else {
+      parts.push(asset.ai_description);
+    }
+  }
+
+  // ── 5. AI actions
+  if (asset.ai_actions) {
+    try { parts.push(...JSON.parse(asset.ai_actions)); } catch {}
+  }
+
+  // ── 6. AI tags — human-readable labels repeated for weight, IDs once
+  const ALL_TAXONOMY = [...AI_TAXONOMY, ...ADS_AI_TAXONOMY, ...BRAND_AI_TAXONOMY];
+  const taxonomyMap  = Object.fromEntries(ALL_TAXONOMY.map(t => [t.id, t.label]));
+  if (asset.ai_tags) {
+    try {
+      const ids = JSON.parse(asset.ai_tags);
+      for (const id of ids) {
+        const label = taxonomyMap[id];
+        if (label) { parts.push(label); parts.push(label); } // label twice
+        parts.push(id); // ID once
+      }
+    } catch {}
+  }
+
+  // ── 7. User-assigned tags (folder tag tree paths)
   const tagIds = asset.tagIds || [];
-  for (const tid of tagIds) { const t = allTags.find(x => x.id === tid); if (t) parts.push(t.path); }
+  for (const tid of tagIds) {
+    const t = allTags.find(x => x.id === tid);
+    if (t) parts.push(t.path);
+  }
+
   return parts.join(' ');
 }
 
+// ─── Apply folder-based tags to all un-tagged brand assets ──────────────────
+async function applyFolderTagsToBrand() {
+  // Fetch ALL brand assets — apply folder tags without touching ai_tagged_at
+  // so assets still appear in the Tagging Queue for AI vision enhancement
+  const all = brand.db.prepare(
+    'SELECT id, name, path, extension FROM assets WHERE (deleted IS NULL OR deleted = 0)'
+  ).all();
+  if (!all.length) return;
+  console.log(`[FolderTags] Pre-tagging ${all.length} brand assets from folder structure…`);
+  const stmt = brand.db.prepare(
+    'UPDATE assets SET ai_tags = ? WHERE id = ?'
+  );
+  for (const asset of all) {
+    const ext  = (asset.extension || '').toLowerCase();
+    const tags = inferBrandTagsFromPath(asset.path, ext);
+    if (tags.length) {
+      // Merge with any existing AI tags (from previous tagging runs)
+      let existing = [];
+      try {
+        const row = brand.db.prepare('SELECT ai_tags FROM assets WHERE id = ?').get(asset.id);
+        existing = JSON.parse(row?.ai_tags || '[]');
+      } catch {}
+      const merged = [...new Set([...existing, ...tags])];
+      stmt.run(JSON.stringify(merged), asset.id);
+    }
+  }
+  console.log('[FolderTags] Done');
+}
+
+// Also expose as API so a manual trigger is possible
+app.post('/api/brand/folder-tags/apply', async (_req, res) => {
+  try {
+    await applyFolderTagsToBrand();
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 async function computeAllEmbeddings(db) {
-  const assets  = db.db.prepare('SELECT * FROM assets WHERE embedding IS NULL AND ai_tagged_at IS NOT NULL').all();
+  const assets = db.db.prepare(
+    "SELECT * FROM assets WHERE embedding IS NULL AND (deleted IS NULL OR deleted = 0)"
+  ).all();
   if (!assets.length) { console.log('[Embeddings] All assets already embedded'); return; }
   console.log(`[Embeddings] Computing ${assets.length} embeddings…`);
   const allTags = db.tagOps.getAll();
   for (const asset of assets) {
     const tagLinks = db.db.prepare('SELECT tag_id FROM asset_tags WHERE asset_id = ?').all(asset.id);
     const enriched = { ...asset, tagIds: tagLinks.map(r => r.tag_id) };
-    const corpus   = buildSearchCorpus(enriched, allTags);
+    // Build full search_text for keyword scoring and store it
+    const searchText = buildSearchCorpus(enriched, allTags);
     try {
-      const vec = await computeEmbedding(corpus);
-      db.assetOps.setEmbedding(asset.id, vec, corpus);
+      // Embed asset.name only — cleaner vector space, avoids tag blob noise
+      const vec = await computeEmbedding(asset.name);
+      db.assetOps.setEmbedding(asset.id, vec, searchText);
     } catch (err) { console.error('[Embedding]', asset.name, err.message); }
   }
   console.log('[Embeddings] Done');
@@ -711,18 +1230,101 @@ async function computeAllEmbeddings(db) {
 
 // ─── Semantic search ──────────────────────────────────────────────────────────
 
+// ─── Token buckets ────────────────────────────────────────────────────────────
+const EXT_TOKEN_SET  = new Set(['svg','png','jpg','jpeg','gif','webp','pdf','mp4','mov','avi','c4d','blend','obj','fbx','exr','tif','tiff','zip','ai','psd']);
+const TYPE_TOKEN_SET = new Set(['logo','icon','banner','background','thumbnail','template','mockup','badge','texture','model','bundle','pattern','overlay']);
+
+function parseQueryTokens(query) {
+  const words = stripAccents(query).toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  const extensionTokens = words.filter(w => EXT_TOKEN_SET.has(w));
+  const typeTokens      = words.filter(w => TYPE_TOKEN_SET.has(w));
+  const brandTokens     = words.filter(w => !EXT_TOKEN_SET.has(w) && !TYPE_TOKEN_SET.has(w));
+  return { extensionTokens, typeTokens, brandTokens };
+}
+
+function fieldAwareScore(asset, { extensionTokens, typeTokens, brandTokens }, queryVec) {
+  const normName   = stripAccents(asset.name || '').toLowerCase();
+  const normExt    = (asset.extension || '').toLowerCase();
+  const normCorpus = stripAccents(asset.search_text || '').toLowerCase();
+  const assetVec   = JSON.parse(asset.embedding);
+
+  // 1. Brand tokens vs normalised name (most discriminating)
+  const brandScore = brandTokens.length > 0
+    ? brandTokens.filter(t => normName.includes(t)).length / brandTokens.length
+    : 1.0;
+
+  // 2. Extension match against extension field
+  const extScore = extensionTokens.length > 0
+    ? (extensionTokens.some(t => t === normExt) ? 1.0 : 0.0)
+    : 1.0;
+
+  // 3. Type tokens against full search_text
+  const typeScore = typeTokens.length > 0
+    ? typeTokens.filter(t => normCorpus.includes(t)).length / typeTokens.length
+    : 1.0;
+
+  // 4. Cosine similarity (name-embedded, lightweight fallback)
+  const semScore = cosineSimilarity(queryVec, assetVec);
+
+  return brandScore * 0.50 + extScore * 0.25 + typeScore * 0.15 + semScore * 0.10;
+}
+
+// ─── Hybrid keyword score: fraction of query tokens found in search_text ────
+function stripAccents(str) {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function keywordScore(queryTokens, searchText) {
+  if (!queryTokens.length || !searchText) return 0;
+  const haystack   = stripAccents(searchText).toLowerCase();
+  const normTokens = queryTokens.map(t => stripAccents(t).toLowerCase());
+  const matched    = normTokens.filter(w => haystack.includes(w));
+  return matched.length / normTokens.length;
+}
+
 function mountSemanticSearch(prefix, db) {
   app.post(`${prefix}/search/semantic`, async (req, res) => {
     try {
       const { query } = req.body || {};
       if (!query) return res.status(400).json({ error: 'query required' });
-      const queryVec  = await computeEmbedding(query);
-      const stored    = db.assetOps.getAllEmbeddings();
-      const scored    = stored.map(r => ({ id: r.id, score: cosineSimilarity(queryVec, r.vector) }))
-        .sort((a, b) => b.score - a.score).slice(0, 60);
-      const assets    = db.assetOps.getByIds(scored.map(r => r.id));
-      const scoreMap  = Object.fromEntries(scored.map(r => [r.id, r.score]));
-      res.json({ assets: assets.map(a => ({ ...a, score: scoreMap[a.id] })) });
+
+      // Parse tokens into buckets
+      const { extensionTokens, typeTokens, brandTokens } = parseQueryTokens(query);
+
+      // Embed query (against name-only vector space)
+      const queryVec = await computeEmbedding(query);
+
+      // Load all assets with embeddings
+      const stored = db.db.prepare(
+        'SELECT id, name, extension, embedding, search_text FROM assets WHERE embedding IS NOT NULL'
+      ).all();
+
+      // Pre-filter: if brand tokens present, restrict to assets whose name contains at least one
+      let candidates = stored;
+      if (brandTokens.length > 0) {
+        const filtered = stored.filter(r => {
+          const n = stripAccents(r.name || '').toLowerCase();
+          return brandTokens.some(t => n.includes(t));
+        });
+        if (filtered.length > 0) candidates = filtered;
+      }
+
+      console.log('brandTokens:', brandTokens);
+      console.log('candidates after filter:', candidates.length);
+
+      // Score and sort
+      const scored = candidates
+        .map(r => ({ id: r.id, score: fieldAwareScore(r, { extensionTokens, typeTokens, brandTokens }, queryVec) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 60);
+
+      console.log('top 3 names:', scored.slice(0, 3).map(r => candidates.find(c => c.id === r.id)?.name));
+
+      const assets   = db.assetOps.getByIds(scored.map(r => r.id));
+      const scoreMap = Object.fromEntries(scored.map(r => [r.id, r.score]));
+      // Re-sort by score order (getByIds returns SQLite row order, not score order)
+      const ordered  = scored.map(r => assets.find(a => a.id === r.id)).filter(Boolean);
+      res.json({ assets: ordered.map(a => ({ ...a, score: scoreMap[a.id] })) });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -734,6 +1336,7 @@ function mountSemanticSearch(prefix, db) {
 
 mountSemanticSearch('/api/raw', raw);
 mountSemanticSearch('/api/ads', ads);
+mountSemanticSearch('/api/brand', brand);
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
@@ -775,9 +1378,12 @@ app.listen(PORT, async () => {
   // Start polling Upload/ for new files
   uploadWatcher.startPolling();
 
-  // Compute embeddings in background (raw only — ads uses monday search)
-  setTimeout(() => {
+  // Compute embeddings in background for both raw and brand
+  setTimeout(async () => {
+    // Apply folder-based tags to any brand asset not yet tagged
+    await applyFolderTagsToBrand();
     computeAllEmbeddings(raw).catch(err => console.error('[Startup embeddings]', err.message));
+    computeAllEmbeddings(brand).catch(err => console.error('[Brand embeddings]', err.message));
   }, 8000);
 });
 

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { FilterBar } from '../components/FilterBar'
 import { SearchBar } from '../components/SearchBar'
+import { SortControl } from '../components/SortControl'
 import { AssetCard, AssetPreviewModal } from '../components/AssetCard'
 import { MondayPanel } from '../components/MondayPanel'
 import { EXT_GROUPS, cn } from '../lib/utils'
-import { AI_TAG_MAP, parseAiTags } from '../lib/aiTags'
+import { AI_TAG_MAP, AI_TAGS, AI_TAG_CATEGORIES, parseAiTags } from '../lib/aiTags'
 import { ChevronLeft, ChevronRight, Sparkles, X } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useApiBase } from '../lib/ApiContext'
@@ -73,8 +74,17 @@ export default function LibraryPage() {
   // Final Assets (ads) specific
   const [mondayAsset, setMondayAsset]   = useState(null)
   const [linkMode, setLinkMode]         = useState(false)
+  const [aiTagList, setAiTagList]       = useState(AI_TAGS)
+  const [aiTagCategoryList, setAiTagCategoryList] = useState(AI_TAG_CATEGORIES)
   const [linkResult, setLinkResult]     = useState(null)
   const [linkLoading, setLinkLoading]   = useState(false)
+  // Ads: dynamic Monday platform + campaign lists
+  const [mondayPlatforms, setMondayPlatforms] = useState([])
+  const [mondayCampaigns, setMondayCampaigns] = useState([])
+  const [mondayProducts,  setMondayProducts]  = useState([])
+  const [platformFilter,  setPlatformFilter]  = useState(null)
+  const [campaignFilter,  setCampaignFilter]  = useState(null)
+  const [adsProductFilter, setAdsProductFilter] = useState(null)
   const searchTimer = useRef(null)
 
   // ── URL deep-link sync: ?asset={dropbox_id} (opaque hex, not sequential int)
@@ -91,8 +101,24 @@ export default function LibraryPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // intentionally only on mount
 
+  // ── Fetch AI tag taxonomy for this library (brand vs raw/ads) ─────────────
+  useEffect(() => {
+    fetch(`${apiBase}/ai-tags/taxonomy`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!Array.isArray(data) || !data.length) return
+        setAiTagList(data.map(t => ({ ...t, color: t.color ?? '#6366f1' })))
+        setAiTagCategoryList([...new Set(data.map(t => t.category))])
+      })
+      .catch(() => {})
+  }, [apiBase])
+
+  // Track if a content-type toggle happened so we can refetch the list on close
+  const needsRefreshRef = useRef(false)
+
   function openAsset(asset) {
-    setSelectedAsset(asset)
+    needsRefreshRef.current = false
+    handleSelectAsset(asset)
     const params = new URLSearchParams(location.search)
     params.set('asset', asset.dropbox_id)
     navigate({ search: params.toString() }, { replace: true })
@@ -103,6 +129,10 @@ export default function LibraryPage() {
     const params = new URLSearchParams(location.search)
     params.delete('asset')
     navigate({ search: params.toString() }, { replace: true })
+    if (needsRefreshRef.current) {
+      needsRefreshRef.current = false
+      fetchAssets()
+    }
   }
 
   // Fetch tags
@@ -134,6 +164,9 @@ export default function LibraryPage() {
 
       const containerName  = opts.containerFilter  !== undefined ? opts.containerFilter  : containerFilter
       const contentType    = opts.contentTypeFilter !== undefined ? opts.contentTypeFilter : contentTypeFilter
+      const platform       = opts.platformFilter    !== undefined ? opts.platformFilter    : platformFilter
+      const campaign       = opts.campaignFilter    !== undefined ? opts.campaignFilter    : campaignFilter
+      const adsProduct     = opts.adsProductFilter  !== undefined ? opts.adsProductFilter  : adsProductFilter
 
       if (searchVal)     params.set('search', searchVal)
       if (tagIds.length) params.set('tags', tagIds.join(','))
@@ -141,9 +174,13 @@ export default function LibraryPage() {
       if (ext) {
         const exts = EXT_GROUPS[ext]
         if (exts) params.set('ext', exts.join(','))
+        else params.set('ext', ext)
       }
-      if (containerName) params.set('container_name', containerName)
-      if (contentType)   params.set('content_type',   contentType)
+      if (containerName)  params.set('container_name', containerName)
+      if (contentType)    params.set('content_type',   contentType)
+      if (platform)       params.set('platform',       platform)
+      if (campaign)       params.set('campaign',       campaign)
+      if (adsProduct)     params.set('monday_product', adsProduct)
       if (isAds) params.set('monday_linked', 'true')
       params.set('sort', currentSort)
       params.set('page', currentPage)
@@ -162,10 +199,25 @@ export default function LibraryPage() {
       })
     } catch { if (!hasCached) setAssets([]) }
     finally { setLoading(false); setRefreshing(false) }
-  }, [search, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, sort, page, isAds, apiBase])
+  }, [search, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page, isAds, apiBase])
 
-  // Re-fetch whenever backend changes (apiBase) OR any filter changes
-  useEffect(() => { fetchAssets() }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, sort, page])
+  // Re-fetch whenever any filter changes
+  useEffect(() => { fetchAssets() }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page])
+
+  // Auto-refetch when a sync completes (fired by AppLayout)
+  useEffect(() => {
+    const handler = () => fetchAssets()
+    window.addEventListener('asset-library-synced', handler)
+    return () => window.removeEventListener('asset-library-synced', handler)
+  }, [fetchAssets])
+
+  // Ads: fetch dynamic Monday lists once
+  useEffect(() => {
+    if (!isAds) return
+    fetch(`${apiBase}/monday/platforms`).then(r => r.ok ? r.json() : []).then(setMondayPlatforms).catch(() => {})
+    fetch(`${apiBase}/monday/campaigns`).then(r => r.ok ? r.json() : []).then(setMondayCampaigns).catch(() => {})
+    fetch(`${apiBase}/monday/products`).then(r  => r.ok ? r.json() : []).then(setMondayProducts).catch(() => {})
+  }, [isAds, apiBase])
 
   // Debounce search — detect URLs for link-mode (ads only), otherwise normal search
   useEffect(() => {
@@ -222,6 +274,9 @@ export default function LibraryPage() {
     setExtFilter('')
     setContainerFilter(null)
     setContentTypeFilter(null)
+    setPlatformFilter(null)
+    setCampaignFilter(null)
+    setAdsProductFilter(null)
     setSemanticMode(false)
     setSemanticAssets([])
     setSemanticMessage('')
@@ -263,13 +318,22 @@ export default function LibraryPage() {
     setSelectedAsset(prev => prev && prev.id === assetId ? { ...prev, ...patch } : prev)
   }
 
+  // Fire use-count increment when an asset panel is opened (Raw + Brand only)
+  const handleSelectAsset = (asset) => {
+    setSelectedAsset(asset)
+    if (asset && !isAds) {
+      const lib = sidebarMode === 'brand' ? 'brand' : 'raw'
+      fetch(`${apiBase.replace('/api/ads', `/api/${lib}`)}/assets/${asset.id}/use`, { method: 'POST' }).catch(() => {})
+    }
+  }
+
   const activeFilterCount = selectedTagIds.length + selectedAiTags.length + (extFilter ? 1 : 0)
 
   return (
     <div className="flex flex-1 overflow-hidden">
       <div className="flex-1 flex flex-col overflow-hidden">
 
-        {/* Top toolbar: Search + Sort */}
+        {/* Top toolbar: Search + Sort (sort lives here, right-aligned, distinct from filters) */}
         <div className="flex items-center gap-3 px-6 py-3 border-b border-[var(--border)] shrink-0">
           <div className="flex-1">
             <SearchBar
@@ -283,16 +347,7 @@ export default function LibraryPage() {
               loading={loading && !!search && !semanticMode}
             />
           </div>
-          {/* Sort — always available */}
-          <select
-            value={sort}
-            onChange={e => { setSort(e.target.value); setPage(1) }}
-            className="text-[12px] px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors cursor-pointer outline-none"
-          >
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="name">Name A–Z</option>
-          </select>
+          <SortControl value={sort} onChange={v => { setSort(v); setPage(1) }} />
         </div>
 
         {/* Filter chip bar */}
@@ -303,13 +358,31 @@ export default function LibraryPage() {
             onExtFilter={handleExtFilter}
             selectedContentType={contentTypeFilter}
             onSelectContentType={type => { setContentTypeFilter(type); setPage(1) }}
-            containers={containers}
+            rawProducts={[
+              ...(containers?.products || []),
+              ...(containers?.bundles  || []),
+            ]}
             selectedContainer={containerFilter}
             onSelectContainer={name => { setContainerFilter(name); setPage(1) }}
+            mondayPlatforms={mondayPlatforms}
+            mondayCampaigns={mondayCampaigns}
+            mondayProducts={mondayProducts}
+            platformFilter={platformFilter}
+            campaignFilter={campaignFilter}
+            adsProductFilter={adsProductFilter}
+            onSelectPlatform={v => { setPlatformFilter(v); setPage(1) }}
+            onSelectCampaign={v => { setCampaignFilter(v); setPage(1) }}
+            onSelectAdsProduct={v => { setAdsProductFilter(v); setPage(1) }}
             selectedAiTags={selectedAiTags}
             onToggleAiTag={handleToggleAiTag}
-            activeCount={selectedTagIds.length + selectedAiTags.length + (extFilter ? 1 : 0)
-              + (containerFilter ? 1 : 0) + (contentTypeFilter ? 1 : 0)}
+            aiTagList={aiTagList}
+            aiTagCategoryList={aiTagCategoryList}
+            activeCount={
+              selectedTagIds.length + selectedAiTags.length + (extFilter ? 1 : 0)
+              + (containerFilter ? 1 : 0) + (contentTypeFilter ? 1 : 0)
+              + (platformFilter ? 1 : 0) + (campaignFilter ? 1 : 0)
+              + (adsProductFilter ? 1 : 0)
+            }
             onClear={handleClear}
           />
         </div>
@@ -395,6 +468,15 @@ export default function LibraryPage() {
           tags={tags}
           onClose={closeAsset}
           onAiTagsUpdated={handleAiTagsUpdated}
+          onContentTypeChange={(assetId, newType, newPath) => {
+            needsRefreshRef.current = true
+            // Update the modal's displayed path immediately
+            setSelectedAsset(prev =>
+              prev && prev.id === assetId
+                ? { ...prev, content_type: newType, path: newPath }
+                : prev
+            )
+          }}
         />
       )}
 

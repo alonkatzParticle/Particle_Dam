@@ -75,6 +75,7 @@ async function resolveAllDropboxPaths(db) {
           monday_id: t.monday_id, board_id: t.board_id, name: t.name, status: t.status,
           product: t.product, platform: t.platform, task_type: t.task_type,
           department: t.department, hook: t.hook, concept: t.concept,
+          campaign: t.campaign,
           dropbox_url: t.dropbox_url, frame_url: t.frame_url, project_url: t.project_url,
           dropbox_path: t.dropbox_path,
         });
@@ -142,6 +143,7 @@ async function resolveAllDropboxPaths(db) {
               department:   fullTask.department,
               hook:         fullTask.hook,
               concept:      fullTask.concept,
+              campaign:     fullTask.campaign,
               dropbox_url:  fullTask.dropbox_url,
               frame_url:    fullTask.frame_url,
               project_url:  fullTask.project_url,
@@ -156,7 +158,7 @@ async function resolveAllDropboxPaths(db) {
                 for (const f of fileList) {
                   upsertAsset.run(
                     f.id, f.path_display, f.path_lower, f.name,
-                    f.size || 0, f.server_modified || f.client_modified || null,
+                    f.size || 0, f.client_modified || f.server_modified || null,
                     extOf(f.name), fullTask.monday_id, mondayJson,
                     buildSearchText(f, { ...fullTask, dropbox_path: path }),
                     syncStart
@@ -223,6 +225,7 @@ function buildSearchText(file, task) {
     if (task.department) parts.push(task.department);
     if (task.concept)    parts.push(task.concept);
     if (task.hook)       parts.push(task.hook);
+    if (task.campaign)   parts.push(task.campaign);
     // Also include the resolved dropbox path (search by folder URL key)
     if (task.dropbox_path) parts.push(task.dropbox_path.replace(/\//g, ' '));
   }
@@ -264,18 +267,18 @@ async function runMondaySync(db, opts = {}) {
       const upsert = db.prepare(`
         INSERT INTO monday_tasks
           (monday_id, board_id, name, status, product, task_type, department, platform, concept, hook,
-           dropbox_url, dropbox_key, frame_url, project_url, editor, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           dropbox_url, dropbox_key, frame_url, project_url, editor, campaign, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(monday_id) DO UPDATE SET
           board_id=excluded.board_id, name=excluded.name, status=excluded.status,
           product=excluded.product, task_type=excluded.task_type, department=excluded.department,
           platform=excluded.platform, concept=excluded.concept, hook=excluded.hook,
           dropbox_url=excluded.dropbox_url, dropbox_key=excluded.dropbox_key,
           frame_url=excluded.frame_url, project_url=excluded.project_url,
-          editor=excluded.editor, synced_at=excluded.synced_at
+          editor=excluded.editor, campaign=excluded.campaign, synced_at=excluded.synced_at
       `);
       db.transaction(ts => {
-        for (const t of ts) upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor);
+        for (const t of ts) upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor, t.campaign ?? null);
       })(tasks);
 
       // Refresh monday_json on already-linked assets
@@ -338,6 +341,7 @@ async function runMondaySync(db, opts = {}) {
           department:  task.department,
           hook:        task.hook,
           concept:     task.concept,
+          campaign:    task.campaign,
           dropbox_url: task.dropbox_url,
           frame_url:   task.frame_url,
           project_url: task.project_url,
@@ -353,7 +357,7 @@ async function runMondaySync(db, opts = {}) {
               f.path_lower,
               f.name,
               f.size || 0,
-              f.server_modified || f.client_modified || null,
+              f.client_modified || f.server_modified || null,
               ext,
               task.monday_id,
               mondayJson,
