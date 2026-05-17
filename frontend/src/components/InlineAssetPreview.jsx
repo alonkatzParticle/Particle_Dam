@@ -6,7 +6,7 @@ import { useApiBase } from '../lib/ApiContext'
 // Fills the main content area above the task drawer.
 // Two-column: big media left, details right.
 
-export function InlineAssetPreview({ asset, drawerHeightPx = 208 }) {
+export function InlineAssetPreview({ asset }) {
   const apiBase = useApiBase()
   const [previewUrl, setPreviewUrl]       = useState(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
@@ -65,10 +65,7 @@ export function InlineAssetPreview({ asset, drawerHeightPx = 208 }) {
   if (!asset) return null
 
   return (
-    <div
-      className="flex flex-1 overflow-hidden"
-      style={{ paddingBottom: drawerHeightPx }}
-    >
+    <div className="flex flex-1 overflow-hidden">
       {/* ── Left: Media preview ─────────────────────────────────────── */}
       <div className="flex-1 bg-black/60 flex items-center justify-center overflow-hidden relative">
         {isMedia ? (

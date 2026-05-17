@@ -457,49 +457,42 @@ export default function LibraryPage() {
           </div>
         )}
 
-
-        {/* Grid / Inline preview */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {/* When a task is open in ads mode, show the inline preview instead of the grid */}
-          {isAds && expandedTask && selectedAsset ? (
-            <InlineAssetPreview asset={selectedAsset} drawerHeightPx={208} />
-          ) : (
-            <div className="flex-1 overflow-y-auto px-6 py-6">
-              {loading ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                  {Array.from({ length: 20 }).map((_, i) => <SkeletonCard key={i} />)}
+        {/* Grid — always visible */}
+        <div className="flex-1 overflow-y-auto px-6 py-6">
+          {loading ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {Array.from({ length: 20 }).map((_, i) => <SkeletonCard key={i} />)}
+            </div>
+          ) : isAds ? (
+            tasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 gap-3">
+                <span className="text-4xl opacity-30">📋</span>
+                <p className="text-[var(--muted-foreground)] text-sm">No tasks found</p>
+                {(platformFilter || campaignFilter || adsProductFilter || search) && (
+                  <button onClick={handleClear} className="text-[var(--primary)] text-sm hover:opacity-70 transition-opacity">Clear filters</button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 fade-in">
+                  {tasks.map(task => (
+                    <TaskCard
+                      key={task.monday_id}
+                      task={task}
+                      onClick={() => {
+                        setExpandedTask(task)
+                        if (task.assets?.[0]) {
+                          const first = task.assets[0]
+                          handleSelectAsset(first.monday ? first : { ...first, monday: task })
+                        }
+                      }}
+                    />
+                  ))}
                 </div>
-              ) : isAds ? (
-                /* ── Ads: task-grouped grid ── */
-                tasks.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-64 gap-3">
-                    <span className="text-4xl opacity-30">📋</span>
-                    <p className="text-[var(--muted-foreground)] text-sm">No tasks found</p>
-                    {(platformFilter || campaignFilter || adsProductFilter || search) && (
-                      <button onClick={handleClear} className="text-[var(--primary)] text-sm hover:opacity-70 transition-opacity">Clear filters</button>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 fade-in">
-                      {tasks.map(task => (
-                        <TaskCard
-                          key={task.monday_id}
-                          task={task}
-                          onClick={() => {
-                            setExpandedTask(task)
-                            if (task.assets?.[0]) {
-                              const first = task.assets[0]
-                              handleSelectAsset(first.monday ? first : { ...first, monday: task })
-                            }
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <Pagination page={page} pages={pages} onPage={p => { setPage(p); window.scrollTo(0, 0) }} />
-                  </>
-                )
-              ) : (semanticMode ? semanticAssets : assets).length === 0 ? (
+                <Pagination page={page} pages={pages} onPage={p => { setPage(p); window.scrollTo(0, 0) }} />
+              </>
+            )
+          ) : (semanticMode ? semanticAssets : assets).length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 gap-3">
               <span className="text-4xl opacity-30">{semanticMode ? '🔍' : '📂'}</span>
               <p className="text-[var(--muted-foreground)] text-sm">
@@ -534,22 +527,45 @@ export default function LibraryPage() {
             </>
           )}
         </div>
-          )}
-        </div>
       </div>
 
-      {/* Task expanded view — ads mode */}
-      {isAds && expandedTask && (
-        <TaskExpandedView
-          task={expandedTask}
-          activeAssetId={selectedAsset?.id}
-          onSelectAsset={asset => {
-            const enriched = asset.monday ? asset : { ...asset, monday: expandedTask }
-            handleSelectAsset(enriched)
-          }}
-          onClose={() => { setExpandedTask(null); setSelectedAsset(null) }}
-        />
-      )}
+      {/* ── Ads overlay: backdrop + floating preview + drawer ── */}
+      {isAds && expandedTask && (() => {
+        const closeAll = () => { setExpandedTask(null); setSelectedAsset(null) }
+        const DRAWER_H = 208
+        return (
+          <>
+            {/* Backdrop — dims the grid, click to close */}
+            <div
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+              onClick={closeAll}
+            />
+
+            {/* Floating preview panel — sits above the drawer */}
+            {selectedAsset && (
+              <div
+                className="fixed left-6 right-6 z-50 bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden flex"
+                style={{ bottom: DRAWER_H + 12, maxHeight: 'calc(65vh)' }}
+                onClick={e => e.stopPropagation()}
+              >
+                <InlineAssetPreview asset={selectedAsset} />
+              </div>
+            )}
+
+            {/* Drawer strip */}
+            <TaskExpandedView
+              task={expandedTask}
+              activeAssetId={selectedAsset?.id}
+              onSelectAsset={asset => {
+                const enriched = asset.monday ? asset : { ...asset, monday: expandedTask }
+                handleSelectAsset(enriched)
+              }}
+              onClose={closeAll}
+            />
+          </>
+        )
+      })()}
+
 
       {/* AssetPreviewModal — raw/brand only, or ads mode without a task open */}
       {selectedAsset && !(isAds && expandedTask) && (
