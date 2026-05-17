@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { ExternalLink, Film, Image, FileText, Files } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useApiBase } from '../lib/ApiContext'
@@ -38,21 +38,33 @@ const SCRUB_CAP = 10   // max files shown in scrub; rest visible in expanded vie
 function ScrubPreview({ assets, apiBase }) {
   const [activeIdx, setActiveIdx]   = useState(0)
   const [thumbUrls, setThumbUrls]   = useState({})
-  const [loaded, setLoaded]         = useState(false)
+  const [restLoaded, setRestLoaded] = useState(false)
   const containerRef                = useRef(null)
   const scrubAssets                 = assets.slice(0, SCRUB_CAP)
 
-  const preload = useCallback(() => {
-    if (loaded) return
-    setLoaded(true)
-    scrubAssets.forEach((a, i) => {
+  // Load index 0 immediately on mount so every card shows something
+  useEffect(() => {
+    if (!scrubAssets[0]) return
+    const url = `${apiBase}/assets/${scrubAssets[0].id}/thumbnail`
+    const img = new window.Image()
+    img.src = url
+    img.onload  = () => setThumbUrls(prev => ({ ...prev, [0]: url }))
+    img.onerror = () => setThumbUrls(prev => ({ ...prev, [0]: null }))
+  }, [scrubAssets[0]?.id, apiBase])
+
+  // Load indices 1–N on first hover
+  const preloadRest = useCallback(() => {
+    if (restLoaded) return
+    setRestLoaded(true)
+    scrubAssets.slice(1).forEach((a, i) => {
+      const idx = i + 1
       const url = `${apiBase}/assets/${a.id}/thumbnail`
       const img = new window.Image()
       img.src = url
-      img.onload = () => setThumbUrls(prev => ({ ...prev, [i]: url }))
-      img.onerror = () => setThumbUrls(prev => ({ ...prev, [i]: null }))
+      img.onload  = () => setThumbUrls(prev => ({ ...prev, [idx]: url }))
+      img.onerror = () => setThumbUrls(prev => ({ ...prev, [idx]: null }))
     })
-  }, [loaded, scrubAssets, apiBase])
+  }, [restLoaded, scrubAssets, apiBase])
 
   const onMouseMove = useCallback((e) => {
     if (!containerRef.current || scrubAssets.length === 0) return
@@ -70,7 +82,7 @@ function ScrubPreview({ assets, apiBase }) {
       ref={containerRef}
       className="relative w-full bg-black/40 overflow-hidden"
       style={{ aspectRatio: '16/10' }}
-      onMouseEnter={preload}
+      onMouseEnter={preloadRest}
       onMouseMove={onMouseMove}
     >
       {/* Thumbnail image */}
