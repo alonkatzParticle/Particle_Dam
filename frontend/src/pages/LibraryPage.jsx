@@ -246,6 +246,22 @@ export default function LibraryPage() {
     return () => window.removeEventListener('asset-library-synced', handler)
   }, [fetchAssets, fetchTasks, isAds])
 
+  // Pre-warm preview URLs for the first file of each visible task.
+  // Fires immediately after the task grid loads so server-side temp links are
+  // already cached by the time the user clicks a card.
+  useEffect(() => {
+    if (!isAds || !tasks.length) return
+    // Spread requests out slightly so we don't hammer Dropbox all at once
+    tasks.forEach((task, i) => {
+      const firstAsset = task.assets?.[0]
+      if (!firstAsset) return
+      setTimeout(() => {
+        fetch(`${apiBase}/assets/${firstAsset.id}/preview`).catch(() => {})
+      }, i * 80) // 80ms stagger per task
+    })
+  }, [tasks, isAds, apiBase])
+
+
   // Ads: fetch dynamic Monday lists once
   useEffect(() => {
     if (!isAds) return
@@ -485,6 +501,13 @@ export default function LibraryPage() {
                           const first = task.assets[0]
                           handleSelectAsset(first.monday ? first : { ...first, monday: task })
                         }
+                        // Pre-warm preview URLs for the remaining files so
+                        // switching thumbnails in the drawer is instant
+                        task.assets?.slice(1).forEach((a, i) => {
+                          setTimeout(() => {
+                            fetch(`${apiBase}/assets/${a.id}/preview`).catch(() => {})
+                          }, i * 100)
+                        })
                       }}
                     />
                   ))}
