@@ -273,14 +273,13 @@ export default function LibraryPage() {
   }, [tasks, isAds, apiBase])
 
 
-  // Ads: fetch dynamic Monday lists + boards + departments once
+  // Ads: fetch dynamic Monday lists + boards once
   useEffect(() => {
     if (!isAds) return
     fetch(`${apiBase}/monday/platforms`).then(r => r.ok ? r.json() : []).then(setMondayPlatforms).catch(() => {})
     fetch(`${apiBase}/monday/campaigns`).then(r => r.ok ? r.json() : []).then(setMondayCampaigns).catch(() => {})
     fetch(`${apiBase}/monday/products`).then(r  => r.ok ? r.json() : []).then(setMondayProducts).catch(() => {})
     fetch(`${apiBase}/boards`).then(r => r.ok ? r.json() : { boards: [] }).then(d => setBoards(d.boards || [])).catch(() => {})
-    fetch(`${apiBase}/monday/departments`).then(r => r.ok ? r.json() : []).then(setDepartments).catch(() => {})
   }, [isAds, apiBase])
 
   // Ads: whenever tasks change, fetch coverage summaries + trigger background refresh
@@ -289,7 +288,7 @@ export default function LibraryPage() {
     const taskIds = tasks.map(t => t.monday_id).filter(Boolean)
     if (!taskIds.length) return
 
-    // Fetch batch coverage summary for filter UI (fast — DB only, no API calls)
+    // Fetch batch coverage summary for filter UI (DB only, no API calls)
     fetch(`${apiBase}/coverage/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -297,13 +296,19 @@ export default function LibraryPage() {
       body: JSON.stringify({ taskIds }),
     }).then(r => r.ok ? r.json() : {}).then(setBatchCoverage).catch(() => {})
 
-    // Fire background refresh scan for these tasks (qualifying ones only, rate-limited)
-    fetch(`${apiBase}/coverage/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ taskIds }),
-    }).catch(() => {})
+    // Only refresh qualifying tasks (marketing dept) to avoid hammering Meta API
+    const marketingTaskIds = tasks
+      .filter(t => /marketing/i.test(t.department || ''))
+      .map(t => t.monday_id)
+      .filter(Boolean)
+    if (marketingTaskIds.length) {
+      fetch(`${apiBase}/coverage/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ taskIds: marketingTaskIds }),
+      }).catch(() => {})
+    }
   }, [tasks, isAds, apiBase])
 
   // Debounce search — detect URLs for link-mode (ads only), otherwise normal search
@@ -510,40 +515,8 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* Department toggle — ads mode only */}
-        {isAds && departments.length > 0 && (
-          <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Dept</span>
-            <button
-              onClick={() => { setDepartmentFilter(null); setCoverageFilter(null); setPage(1) }}
-              className={cn(
-                'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-                departmentFilter === null
-                  ? 'bg-[var(--primary)] text-white'
-                  : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
-              )}
-            >
-              All
-            </button>
-            {departments.map(d => (
-              <button
-                key={d}
-                onClick={() => { setDepartmentFilter(departmentFilter === d ? null : d); setCoverageFilter(null); setPage(1) }}
-                className={cn(
-                  'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-                  departmentFilter === d
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
-                )}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Coverage filter — only when Marketing dept is selected */}
-        {isAds && departmentFilter?.toLowerCase().includes('marketing') && (
+        {/* Coverage filter — ads mode only, always visible */}
+        {isAds && (
           <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
             <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Meta</span>
             {[
@@ -729,7 +702,7 @@ export default function LibraryPage() {
                 handleSelectAsset(enriched)
               }}
               onClose={closeAll}
-              coverage={taskCoverage}
+              coverage={/marketing/i.test(expandedTask?.department || '') ? taskCoverage : null}
             />
           </>
         )
