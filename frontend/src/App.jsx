@@ -2,13 +2,14 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { ApiContext } from './lib/ApiContext'
 import { AuthProvider, useAuth } from './lib/AuthContext'
 import { AppLayout } from './components/AppLayout'
-import LibraryPage      from './pages/LibraryPage'
-import UploadPage       from './pages/UploadPage'
-import TaggingQueuePage from './pages/TaggingQueuePage'
-import UploadQueuePage  from './pages/UploadQueuePage'
-import LoginPage        from './pages/LoginPage'
-import PendingPage      from './pages/PendingPage'
-import AdminUsersPage   from './pages/AdminUsersPage'
+import LibraryPage       from './pages/LibraryPage'
+import UploadPage        from './pages/UploadPage'
+import TaggingQueuePage  from './pages/TaggingQueuePage'
+import UploadQueuePage   from './pages/UploadQueuePage'
+import LoginPage         from './pages/LoginPage'
+import PendingPage       from './pages/PendingPage'
+import AdminUsersPage    from './pages/AdminUsersPage'
+import MetaCoveragePage  from './pages/MetaCoveragePage'
 
 // ── Auth guard: wraps all protected routes ────────────────────────────────
 function AuthGuard({ children }) {
@@ -75,7 +76,8 @@ export default function App() {
             <Route path="/uploads" element={<UploadQueuePage />} />
 
             {/* Admin */}
-            <Route path="/admin/users" element={<AdminUsersPage />} />
+            <Route path="/admin/users"         element={<AdminUsersPage />} />
+            <Route path="/admin/meta-coverage" element={<MetaCoveragePage />} />
 
             {/* Redirects */}
             <Route path="/library" element={<Navigate to="/raw/library" replace />} />

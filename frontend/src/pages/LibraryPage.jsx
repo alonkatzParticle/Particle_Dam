@@ -93,13 +93,13 @@ export default function LibraryPage() {
   const [adsProductFilter, setAdsProductFilter] = useState(null)
   const [boardFilter,     setBoardFilter]     = useState(null)   // null = all boards
   const [boards,          setBoards]          = useState([])     // [{id, label}]
-  // Ads: department filter
-  const [departments,       setDepartments]       = useState([])
-  const [departmentFilter,  setDepartmentFilter]  = useState(null)
-  // Ads: Meta coverage filter + per-task coverage data
-  const [coverageFilter,  setCoverageFilter]  = useState(null) // 'uploaded'|'partial'|'none'|null
-  const [batchCoverage,   setBatchCoverage]   = useState({})   // { [taskId]: {total,uploaded,notUploaded} }
-  const [taskCoverage,    setTaskCoverage]     = useState(null) // file-level for opened task
+  // Ads: department filter (unused — reserved for future)
+  // const [departments,       setDepartments]       = useState([])
+  // const [departmentFilter,  setDepartmentFilter]  = useState(null)
+  // TODO: Meta coverage filter — moving to Settings page
+  // const [coverageFilter,  setCoverageFilter]  = useState(null)
+  // const [batchCoverage,   setBatchCoverage]   = useState({})
+  // const [taskCoverage,    setTaskCoverage]     = useState(null)
   const searchTimer = useRef(null)
 
   // ── URL deep-link sync: ?asset={dropbox_id} (opaque hex, not sequential int)
@@ -283,33 +283,16 @@ export default function LibraryPage() {
   }, [isAds, apiBase])
 
   // Ads: whenever tasks change, fetch coverage summaries + trigger background refresh
-  useEffect(() => {
-    if (!isAds || !tasks.length) return
-    const taskIds = tasks.map(t => t.monday_id).filter(Boolean)
-    if (!taskIds.length) return
-
-    // Fetch batch coverage summary for filter UI (DB only, no API calls)
-    fetch(`${apiBase}/coverage/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ taskIds }),
-    }).then(r => r.ok ? r.json() : {}).then(setBatchCoverage).catch(() => {})
-
-    // Only refresh qualifying tasks (marketing dept) to avoid hammering Meta API
-    const marketingTaskIds = tasks
-      .filter(t => /marketing/i.test(t.department || ''))
-      .map(t => t.monday_id)
-      .filter(Boolean)
-    if (marketingTaskIds.length) {
-      fetch(`${apiBase}/coverage/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ taskIds: marketingTaskIds }),
-      }).catch(() => {})
-    }
-  }, [tasks, isAds, apiBase])
+  // TODO: Meta coverage batch fetch — re-enable once Settings page pipeline is live
+  // useEffect(() => {
+  //   if (!isAds || !tasks.length) return
+  //   const taskIds = tasks.map(t => t.monday_id).filter(Boolean)
+  //   if (!taskIds.length) return
+  //   fetch(`${apiBase}/coverage/batch`, {
+  //     method: 'POST', headers: { 'Content-Type': 'application/json' },
+  //     credentials: 'include', body: JSON.stringify({ taskIds }),
+  //   }).then(r => r.ok ? r.json() : {}).then(setBatchCoverage).catch(() => {})
+  // }, [tasks, isAds, apiBase])
 
   // Debounce search — detect URLs for link-mode (ads only), otherwise normal search
   useEffect(() => {
@@ -515,31 +498,8 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* Coverage filter — ads mode only, always visible */}
-        {isAds && (
-          <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Meta</span>
-            {[
-              { value: null,       label: 'All' },
-              { value: 'uploaded', label: 'Uploaded' },
-              { value: 'partial',  label: 'Partial' },
-              { value: 'none',     label: 'Not Uploaded' },
-            ].map(({ value, label }) => (
-              <button
-                key={label}
-                onClick={() => { setCoverageFilter(value); setPage(1) }}
-                className={cn(
-                  'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-                  coverageFilter === value
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* TODO: Coverage filter — moving to /admin/meta-coverage Settings page */}
+        {/* {isAds && ( <div>...Meta filter pills + Scan Now...</div> )} */}
 
         {/* Link-mode banner — Final Assets only */}
         {isAds && linkMode && (
@@ -590,21 +550,12 @@ export default function LibraryPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 fade-in">
-                  {tasks.filter(task => {
-                    if (!coverageFilter) return true
-                    const cov = batchCoverage[task.monday_id]
-                    if (!cov) return coverageFilter === 'none'
-                    if (coverageFilter === 'uploaded') return cov.total > 0 && cov.uploaded === cov.total
-                    if (coverageFilter === 'partial')  return cov.uploaded > 0 && cov.uploaded < cov.total
-                    if (coverageFilter === 'none')     return cov.uploaded === 0
-                    return true
-                  }).map(task => (
+                  {tasks.map(task => (
                     <TaskCard
                       key={task.monday_id}
                       task={task}
                       onClick={() => {
                         setExpandedTask(task)
-                        setTaskCoverage(null) // clear stale coverage from previous task
                         if (task.assets?.[0]) {
                           const first = task.assets[0]
                           handleSelectAsset(first.monday ? first : { ...first, monday: task })
@@ -615,17 +566,8 @@ export default function LibraryPage() {
                             fetch(`${apiBase}/assets/${a.id}/preview`).catch(() => {})
                           }, i * 100)
                         })
-                        // Fetch file-level coverage for this task
-                        fetch(`${apiBase}/coverage/${task.monday_id}`, { credentials: 'include' })
-                          .then(r => r.ok ? r.json() : null)
-                          .then(data => {
-                            if (!data?.files) return
-                            // Key coverage by filename for O(1) lookup in the drawer
-                            const byName = {}
-                            data.files.forEach(f => { byName[f.filename] = f })
-                            setTaskCoverage(byName)
-                          })
-                          .catch(() => {})
+                        // TODO: re-add coverage fetch once Settings page pipeline is live
+                        // fetch(`${apiBase}/coverage/${task.monday_id}`, ...)
                       }}
                     />
                   ))}
@@ -702,8 +644,8 @@ export default function LibraryPage() {
                 handleSelectAsset(enriched)
               }}
               onClose={closeAll}
-              coverage={/marketing/i.test(expandedTask?.department || '') ? taskCoverage : null}
             />
+            {/* coverage prop disabled — see /admin/meta-coverage */}
           </>
         )
       })()}

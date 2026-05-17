@@ -1,5 +1,5 @@
 import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Library, Sparkles, X, Upload, Users, LogOut } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Library, Sparkles, X, Upload, Users, LogOut, BarChart3 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { cn } from '../lib/utils'
 import { ApiContext } from '../lib/ApiContext'
@@ -349,6 +349,15 @@ export function AppLayout() {
                 isActive ? 'text-[var(--primary)] bg-white/5' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-white/5'
               )}>
               <Users size={13} />
+            </NavLink>
+          )}
+          {isAdmin && isAds && (
+            <NavLink to="/admin/meta-coverage" title="Meta Coverage"
+              className={({ isActive }) => cn(
+                'p-1.5 rounded-lg transition-colors',
+                isActive ? 'text-[var(--primary)] bg-white/5' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-white/5'
+              )}>
+              <BarChart3 size={13} />
             </NavLink>
           )}
           <button onClick={handleLogout} title="Sign out"

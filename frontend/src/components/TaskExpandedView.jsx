@@ -43,14 +43,12 @@ function FileThumbnail({ asset, isActive, onClick, apiBase, onMeta }) {
             <div className="w-2 h-2 rounded-full bg-[var(--primary)]" />
           </div>
         )}
-        {/* Meta badge — shown only for confirmed uploads */}
-        {onMeta && (
+        {/* TODO: Meta badge — re-enable once Settings page pipeline is live */}
+        {/* {onMeta && (
           <div className="absolute top-1 left-1">
-            <span className="px-1 py-0.5 rounded text-[8px] font-bold tracking-wider bg-black/70 text-white/80 uppercase">
-              Meta
-            </span>
+            <span className="px-1 py-0.5 rounded text-[8px] font-bold tracking-wider bg-black/70 text-white/80 uppercase">Meta</span>
           </div>
-        )}
+        )} */}
       </div>
 
       {/* File name */}
