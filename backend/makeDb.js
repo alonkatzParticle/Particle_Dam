@@ -83,11 +83,12 @@ module.exports = function makeDb(dbPath) {
       PRIMARY KEY (asset_id, monday_id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_assets_path_lower ON assets(path_lower);
-    CREATE INDEX IF NOT EXISTS idx_assets_extension  ON assets(extension);
-    CREATE INDEX IF NOT EXISTS idx_asset_tags_asset  ON asset_tags(asset_id);
-    CREATE INDEX IF NOT EXISTS idx_asset_tags_tag    ON asset_tags(tag_id);
-    CREATE INDEX IF NOT EXISTS idx_tags_path         ON tags(path);
+    CREATE INDEX IF NOT EXISTS idx_assets_path_lower  ON assets(path_lower);
+    CREATE INDEX IF NOT EXISTS idx_assets_extension   ON assets(extension);
+    CREATE INDEX IF NOT EXISTS idx_assets_monday_id   ON assets(monday_id);
+    CREATE INDEX IF NOT EXISTS idx_asset_tags_asset   ON asset_tags(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_asset_tags_tag     ON asset_tags(tag_id);
+    CREATE INDEX IF NOT EXISTS idx_tags_path          ON tags(path);
     CREATE INDEX IF NOT EXISTS idx_monday_links_asset  ON asset_monday_links(asset_id);
     CREATE INDEX IF NOT EXISTS idx_monday_links_monday ON asset_monday_links(monday_id);
 

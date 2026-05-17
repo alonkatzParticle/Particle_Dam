@@ -647,6 +647,49 @@ const {
   batchRunning: isBatchRunning,
 } = require('./meta_coverage');
 
+// ── Qualifying Tasks Cache ─────────────────────────────────────────────────────
+// Mirrors how Creative Coverage uses getAllCachedTasks() — one JS array in RAM,
+// rebuilt from the monday_tasks table (not assets blobs) on startup + after sync.
+
+let _qualifyingTasksCache = null;
+
+function buildQualifyingTasksCache(db) {
+  try {
+    // monday_tasks has one row per task with proper indexed columns — no JSON blobs
+    const rows = db.prepare(`
+      SELECT mt.monday_id,
+             mt.name        AS task_name,
+             mt.department,
+             mt.status,
+             mt.platform,
+             mt.product,
+             mt.dropbox_url AS dropbox_link,
+             mt.timeline_end,
+             COUNT(a.id)    AS asset_count
+      FROM   monday_tasks mt
+      LEFT JOIN assets a ON a.monday_id = mt.monday_id
+                         AND (a.deleted IS NULL OR a.deleted = 0)
+      WHERE  mt.department IS NOT NULL
+        AND  lower(mt.department) LIKE '%marketing%'
+        AND  lower(mt.status) IN ('done','completed','approved','sent to client','upload complete')
+      GROUP BY mt.monday_id
+      ORDER BY COALESCE(mt.timeline_end,'') DESC
+    `).all();
+
+    _qualifyingTasksCache = rows;
+    console.log(`[Coverage] Qualifying tasks cache built — ${rows.length} tasks`);
+    return rows;
+  } catch (err) {
+    console.error('[Coverage] Failed to build qualifying tasks cache:', err.message);
+    _qualifyingTasksCache = [];
+    return [];
+  }
+}
+
+function getQualifyingTasksCache() {
+  return _qualifyingTasksCache;
+}
+
 // GET /api/ads/coverage/:taskId — file-level coverage for one task
 app.get('/api/ads/coverage/:taskId', requireAuth, (req, res) => {
   try {
@@ -706,48 +749,14 @@ cron.schedule('0 6 * * *', () => {
 
 console.log('[Coverage] Daily 06:00 scan scheduled');
 
-// GET /api/ads/coverage/qualifying-tasks
-// Returns all Marketing+Done/Completed tasks from the local DB (no Meta API)
+// GET /api/ads/coverage/qualifying-tasks — served from RAM, zero DB query
 app.get('/api/ads/coverage/qualifying-tasks', requireAuth, (req, res) => {
-  try {
-    const rows = ads.db.prepare(`
-      SELECT monday_id, MIN(monday_json) AS mj, COUNT(*) AS asset_count
-      FROM   assets
-      WHERE  monday_id IS NOT NULL AND monday_json IS NOT NULL
-        AND  (deleted IS NULL OR deleted = 0)
-      GROUP BY monday_id
-    `).all();
-
-    const tasks = [];
-    for (const row of rows) {
-      let m = {};
-      try { m = JSON.parse(row.mj || '{}'); } catch { continue; }
-      const dept   = (m.department || '').toLowerCase();
-      const status = (m.status     || '').toLowerCase();
-      if (!/marketing/i.test(dept))                   continue;
-      if (!/done|completed|approved/i.test(status))   continue;
-      tasks.push({
-        monday_id:    row.monday_id,
-        task_name:    m.name || m.task_name || row.monday_id,
-        department:   m.department  || null,
-        status:       m.status      || null,
-        platform:     m.platform    || null,
-        product:      m.product     || null,
-        dropbox_link: m.dropbox_link || null,
-        timeline_end: m.timeline_end || null,
-        asset_count:  row.asset_count,
-      });
-    }
-    tasks.sort((a, b) => {
-      if (!a.timeline_end && !b.timeline_end) return 0;
-      if (!a.timeline_end) return 1;
-      if (!b.timeline_end) return -1;
-      return b.timeline_end.localeCompare(a.timeline_end);
-    });
-    res.json({ tasks, total: tasks.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  // Force-rebuild if caller passes ?refresh=1 (e.g. after a manual task edit)
+  if (req.query.refresh === '1' || _qualifyingTasksCache === null) {
+    buildQualifyingTasksCache(ads.db);
   }
+  const tasks = _qualifyingTasksCache || [];
+  res.json({ tasks, total: tasks.length });
 });
 
 // POST /api/ads/coverage/scan/:taskId — scan one task, return result immediately
@@ -767,7 +776,11 @@ app.post('/api/ads/monday/sync', (req, res) => {
   const status = getMondaySyncStatus();
   const forceFetch = req.body?.force === true;
   res.json({ started: true, alreadyRunning: status.running, forceFetch });
-  if (!status.running) runMondaySync(ads.db, { forceFetch }).catch(err => console.error('[Monday]', err.message));
+  if (!status.running) {
+    runMondaySync(ads.db, { forceFetch })
+      .then(() => buildQualifyingTasksCache(ads.db))   // rebuild cache after sync
+      .catch(err => console.error('[Monday]', err.message));
+  }
 });
 
 app.get('/api/ads/monday/sync/status', (_req, res) => res.json(getMondaySyncStatus()));
@@ -1638,6 +1651,9 @@ app.listen(PORT, async () => {
 
   // Start polling Upload/ for new files
   uploadWatcher.startPolling();
+
+  // Build qualifying tasks cache from monday_tasks (instant — uses indexed columns)
+  buildQualifyingTasksCache(ads.db);
 
   // Compute embeddings in background for both raw and brand
   setTimeout(async () => {
