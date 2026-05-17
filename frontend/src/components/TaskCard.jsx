@@ -35,36 +35,75 @@ const STATUS_COLORS = {
 
 const SCRUB_CAP = 10   // max files shown in scrub; rest visible in expanded view
 
+// Module-level cache: assetId → resolved thumbnail URL (or null on error)
+// Survives component unmount so returning to the page doesn't re-fetch.
+const thumbCache = new Map()
+
 function ScrubPreview({ assets, apiBase }) {
   const [activeIdx, setActiveIdx]   = useState(0)
-  const [thumbUrls, setThumbUrls]   = useState({})
-  const [restLoaded, setRestLoaded] = useState(false)
+  const [thumbUrls, setThumbUrls]   = useState(() => {
+    // Seed from module cache on mount so already-loaded thumbs show immediately
+    const seed = {}
+    assets.slice(0, SCRUB_CAP).forEach((a, i) => {
+      if (thumbCache.has(a.id)) seed[i] = thumbCache.get(a.id)
+    })
+    return seed
+  })
+  const [restLoaded, setRestLoaded] = useState(() =>
+    // If all scrub images were already cached, skip the hover-load step
+    assets.slice(1, SCRUB_CAP).every(a => thumbCache.has(a.id))
+  )
+  const [firstLoaded, setFirstLoaded] = useState(() => thumbCache.has(assets[0]?.id))
   const containerRef                = useRef(null)
   const scrubAssets                 = assets.slice(0, SCRUB_CAP)
 
-  // Load index 0 immediately on mount so every card shows something
+  // Load index 0 immediately on mount (skip if already cached)
   useEffect(() => {
     if (!scrubAssets[0]) return
+    if (thumbCache.has(scrubAssets[0].id)) return   // already in cache — nothing to do
     const url = `${apiBase}/assets/${scrubAssets[0].id}/thumbnail`
     const img = new window.Image()
     img.src = url
-    img.onload  = () => setThumbUrls(prev => ({ ...prev, [0]: url }))
-    img.onerror = () => setThumbUrls(prev => ({ ...prev, [0]: null }))
+    img.onload  = () => {
+      thumbCache.set(scrubAssets[0].id, url)
+      setThumbUrls(prev => ({ ...prev, [0]: url }))
+      setFirstLoaded(true)
+    }
+    img.onerror = () => {
+      thumbCache.set(scrubAssets[0].id, null)
+      setThumbUrls(prev => ({ ...prev, [0]: null }))
+    }
   }, [scrubAssets[0]?.id, apiBase])
 
-  // Load indices 1–N on first hover
+  // Load indices 1–N on first hover OR immediately after index 0 loads
   const preloadRest = useCallback(() => {
     if (restLoaded) return
     setRestLoaded(true)
     scrubAssets.slice(1).forEach((a, i) => {
       const idx = i + 1
+      if (thumbCache.has(a.id)) {
+        setThumbUrls(prev => ({ ...prev, [idx]: thumbCache.get(a.id) }))
+        return
+      }
       const url = `${apiBase}/assets/${a.id}/thumbnail`
       const img = new window.Image()
       img.src = url
-      img.onload  = () => setThumbUrls(prev => ({ ...prev, [idx]: url }))
-      img.onerror = () => setThumbUrls(prev => ({ ...prev, [idx]: null }))
+      img.onload  = () => {
+        thumbCache.set(a.id, url)
+        setThumbUrls(prev => ({ ...prev, [idx]: url }))
+      }
+      img.onerror = () => {
+        thumbCache.set(a.id, null)
+        setThumbUrls(prev => ({ ...prev, [idx]: null }))
+      }
     })
   }, [restLoaded, scrubAssets, apiBase])
+
+  // Kick off rest as soon as index 0 is confirmed loaded
+  useEffect(() => {
+    if (firstLoaded) preloadRest()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstLoaded])
 
   const onMouseMove = useCallback((e) => {
     if (!containerRef.current || scrubAssets.length === 0) return
