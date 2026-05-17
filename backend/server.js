@@ -554,6 +554,7 @@ app.get('/api/ads/tasks', (req, res) => {
         JSON_EXTRACT(monday_json, '$.platform')    AS platform,
         JSON_EXTRACT(monday_json, '$.campaign')    AS campaign,
         JSON_EXTRACT(monday_json, '$.status')      AS status,
+        JSON_EXTRACT(monday_json, '$.department')  AS department,
         JSON_EXTRACT(monday_json, '$.board_id')    AS board_id,
         JSON_EXTRACT(monday_json, '$.timeline_end') AS timeline_end,
         JSON_EXTRACT(monday_json, '$.frame_url')   AS frame_url,
@@ -585,6 +586,7 @@ app.get('/api/ads/tasks', (req, res) => {
       platform:    r.platform,
       campaign:    r.campaign,
       status:      r.status,
+      department:  r.department,
       board_id:    r.board_id,
       timeline_end: r.timeline_end,
       frame_url:   r.frame_url,
@@ -614,6 +616,95 @@ app.get('/api/ads/boards', (_req, res) => {
   ].filter(b => b.id);
   res.json({ boards });
 });
+
+// ─── Ads-only: Departments (for filter dropdown) ──────────────────────────────
+
+app.get('/api/ads/monday/departments', (_req, res) => {
+  try {
+    const rows = ads.db.prepare(`
+      SELECT DISTINCT JSON_EXTRACT(monday_json, '$.department') AS dept
+      FROM assets
+      WHERE monday_id IS NOT NULL
+        AND JSON_EXTRACT(monday_json, '$.department') IS NOT NULL
+        AND (deleted IS NULL OR deleted = 0)
+      ORDER BY dept
+    `).all();
+    res.json(rows.map(r => r.dept).filter(Boolean));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Ads-only: Meta Coverage ──────────────────────────────────────────────────
+
+const {
+  scanTask: coverageScanTask,
+  runBatchScan,
+  refreshCoverageForTasks,
+  getTaskCoverage,
+  getBatchCoverage,
+  loadSettings: loadCoverageSettings,
+  batchRunning: isBatchRunning,
+} = require('./meta_coverage');
+
+// GET /api/ads/coverage/:taskId — file-level coverage for one task
+app.get('/api/ads/coverage/:taskId', requireAuth, (req, res) => {
+  try {
+    const data = getTaskCoverage(ads.db, req.params.taskId);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/ads/coverage/batch — summary for multiple tasks (used by grid filter)
+app.post('/api/ads/coverage/batch', requireAuth, (req, res) => {
+  try {
+    const { taskIds } = req.body;
+    if (!Array.isArray(taskIds)) return res.status(400).json({ error: 'taskIds must be an array' });
+    res.json(getBatchCoverage(ads.db, taskIds));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/ads/coverage/refresh — background refresh for visible tasks (fire & forget)
+app.post('/api/ads/coverage/refresh', requireAuth, (req, res) => {
+  const { taskIds } = req.body || {};
+  res.json({ started: true });
+  // Run in background — don't await
+  refreshCoverageForTasks(ads.db, taskIds || []).catch(e =>
+    console.error('[Coverage] refresh error:', e.message)
+  );
+});
+
+// POST /api/ads/coverage/scan/all — manual trigger for full batch scan
+app.post('/api/ads/coverage/scan/all', requireAuth, (req, res) => {
+  res.json({ started: true, alreadyRunning: isBatchRunning() });
+  if (!isBatchRunning()) {
+    runBatchScan(ads.db).catch(e => console.error('[Coverage] batch error:', e.message));
+  }
+});
+
+// GET /api/ads/coverage/settings — check if Meta is configured
+app.get('/api/ads/coverage/settings', requireAuth, (_req, res) => {
+  const { metaToken, metaAccountIds, metaAccountNames } = loadCoverageSettings();
+  res.json({
+    configured: !!(metaToken && metaAccountIds?.length),
+    accountCount: metaAccountIds?.length || 0,
+    accounts: metaAccountNames || {},
+  });
+});
+
+// ─── Daily cron: batch Meta coverage scan at 06:00 ───────────────────────────
+
+const cron = require('node-cron');
+cron.schedule('0 6 * * *', () => {
+  console.log('[Coverage] Starting scheduled daily scan…');
+  runBatchScan(ads.db).catch(e => console.error('[Coverage] Daily scan error:', e.message));
+}, { timezone: 'Asia/Jerusalem' });
+
+console.log('[Coverage] Daily 06:00 scan scheduled');
 
 // ─── Ads-only: Monday sync ────────────────────────────────────────────────────
 

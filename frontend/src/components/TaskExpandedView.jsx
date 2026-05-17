@@ -16,7 +16,7 @@ function extIcon(ext) {
 // Height exported so InlineAssetPreview can pad by the same amount
 export const DRAWER_HEIGHT_PX = 208
 
-function FileThumbnail({ asset, isActive, onClick, apiBase }) {
+function FileThumbnail({ asset, isActive, onClick, apiBase, onMeta }) {
   const thumbUrl = `${apiBase}/assets/${asset.id}/thumbnail`
 
   return (
@@ -43,6 +43,14 @@ function FileThumbnail({ asset, isActive, onClick, apiBase }) {
             <div className="w-2 h-2 rounded-full bg-[var(--primary)]" />
           </div>
         )}
+        {/* Meta badge — shown only for confirmed uploads */}
+        {onMeta && (
+          <div className="absolute top-1 left-1">
+            <span className="px-1 py-0.5 rounded text-[8px] font-bold tracking-wider bg-black/70 text-white/80 uppercase">
+              Meta
+            </span>
+          </div>
+        )}
       </div>
 
       {/* File name */}
@@ -58,7 +66,7 @@ function FileThumbnail({ asset, isActive, onClick, apiBase }) {
   )
 }
 
-export function TaskExpandedView({ task, activeAssetId, onSelectAsset, onClose }) {
+export function TaskExpandedView({ task, activeAssetId, onSelectAsset, onClose, coverage }) {
   const apiBase = useApiBase()
 
   // Escape key to close
@@ -132,6 +140,7 @@ export function TaskExpandedView({ task, activeAssetId, onSelectAsset, onClose }
             isActive={asset.id === activeAssetId}
             apiBase={apiBase}
             onClick={onSelectAsset}
+            onMeta={coverage?.[asset.name]?.uploaded_to_meta === 1}
           />
         ))}
       </div>

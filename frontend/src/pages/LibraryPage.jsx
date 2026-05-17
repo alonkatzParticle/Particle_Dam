@@ -93,6 +93,13 @@ export default function LibraryPage() {
   const [adsProductFilter, setAdsProductFilter] = useState(null)
   const [boardFilter,     setBoardFilter]     = useState(null)   // null = all boards
   const [boards,          setBoards]          = useState([])     // [{id, label}]
+  // Ads: department filter
+  const [departments,       setDepartments]       = useState([])
+  const [departmentFilter,  setDepartmentFilter]  = useState(null)
+  // Ads: Meta coverage filter + per-task coverage data
+  const [coverageFilter,  setCoverageFilter]  = useState(null) // 'uploaded'|'partial'|'none'|null
+  const [batchCoverage,   setBatchCoverage]   = useState({})   // { [taskId]: {total,uploaded,notUploaded} }
+  const [taskCoverage,    setTaskCoverage]     = useState(null) // file-level for opened task
   const searchTimer = useRef(null)
 
   // ── URL deep-link sync: ?asset={dropbox_id} (opaque hex, not sequential int)
@@ -266,14 +273,38 @@ export default function LibraryPage() {
   }, [tasks, isAds, apiBase])
 
 
-  // Ads: fetch dynamic Monday lists + boards once
+  // Ads: fetch dynamic Monday lists + boards + departments once
   useEffect(() => {
     if (!isAds) return
     fetch(`${apiBase}/monday/platforms`).then(r => r.ok ? r.json() : []).then(setMondayPlatforms).catch(() => {})
     fetch(`${apiBase}/monday/campaigns`).then(r => r.ok ? r.json() : []).then(setMondayCampaigns).catch(() => {})
     fetch(`${apiBase}/monday/products`).then(r  => r.ok ? r.json() : []).then(setMondayProducts).catch(() => {})
     fetch(`${apiBase}/boards`).then(r => r.ok ? r.json() : { boards: [] }).then(d => setBoards(d.boards || [])).catch(() => {})
+    fetch(`${apiBase}/monday/departments`).then(r => r.ok ? r.json() : []).then(setDepartments).catch(() => {})
   }, [isAds, apiBase])
+
+  // Ads: whenever tasks change, fetch coverage summaries + trigger background refresh
+  useEffect(() => {
+    if (!isAds || !tasks.length) return
+    const taskIds = tasks.map(t => t.monday_id).filter(Boolean)
+    if (!taskIds.length) return
+
+    // Fetch batch coverage summary for filter UI (fast — DB only, no API calls)
+    fetch(`${apiBase}/coverage/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ taskIds }),
+    }).then(r => r.ok ? r.json() : {}).then(setBatchCoverage).catch(() => {})
+
+    // Fire background refresh scan for these tasks (qualifying ones only, rate-limited)
+    fetch(`${apiBase}/coverage/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ taskIds }),
+    }).catch(() => {})
+  }, [tasks, isAds, apiBase])
 
   // Debounce search — detect URLs for link-mode (ads only), otherwise normal search
   useEffect(() => {
@@ -479,6 +510,64 @@ export default function LibraryPage() {
           </div>
         )}
 
+        {/* Department toggle — ads mode only */}
+        {isAds && departments.length > 0 && (
+          <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Dept</span>
+            <button
+              onClick={() => { setDepartmentFilter(null); setCoverageFilter(null); setPage(1) }}
+              className={cn(
+                'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                departmentFilter === null
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
+              )}
+            >
+              All
+            </button>
+            {departments.map(d => (
+              <button
+                key={d}
+                onClick={() => { setDepartmentFilter(departmentFilter === d ? null : d); setCoverageFilter(null); setPage(1) }}
+                className={cn(
+                  'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                  departmentFilter === d
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
+                )}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Coverage filter — only when Marketing dept is selected */}
+        {isAds && departmentFilter?.toLowerCase().includes('marketing') && (
+          <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Meta</span>
+            {[
+              { value: null,       label: 'All' },
+              { value: 'uploaded', label: 'Uploaded' },
+              { value: 'partial',  label: 'Partial' },
+              { value: 'none',     label: 'Not Uploaded' },
+            ].map(({ value, label }) => (
+              <button
+                key={label}
+                onClick={() => { setCoverageFilter(value); setPage(1) }}
+                className={cn(
+                  'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                  coverageFilter === value
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Link-mode banner — Final Assets only */}
         {isAds && linkMode && (
           <div className="mx-6 mt-3 flex items-center gap-3 px-4 py-2.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-sm shrink-0">
@@ -528,23 +617,42 @@ export default function LibraryPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 fade-in">
-                  {tasks.map(task => (
+                  {tasks.filter(task => {
+                    if (!coverageFilter) return true
+                    const cov = batchCoverage[task.monday_id]
+                    if (!cov) return coverageFilter === 'none'
+                    if (coverageFilter === 'uploaded') return cov.total > 0 && cov.uploaded === cov.total
+                    if (coverageFilter === 'partial')  return cov.uploaded > 0 && cov.uploaded < cov.total
+                    if (coverageFilter === 'none')     return cov.uploaded === 0
+                    return true
+                  }).map(task => (
                     <TaskCard
                       key={task.monday_id}
                       task={task}
                       onClick={() => {
                         setExpandedTask(task)
+                        setTaskCoverage(null) // clear stale coverage from previous task
                         if (task.assets?.[0]) {
                           const first = task.assets[0]
                           handleSelectAsset(first.monday ? first : { ...first, monday: task })
                         }
-                        // Pre-warm preview URLs for the remaining files so
-                        // switching thumbnails in the drawer is instant
+                        // Pre-warm preview URLs for the remaining files
                         task.assets?.slice(1).forEach((a, i) => {
                           setTimeout(() => {
                             fetch(`${apiBase}/assets/${a.id}/preview`).catch(() => {})
                           }, i * 100)
                         })
+                        // Fetch file-level coverage for this task
+                        fetch(`${apiBase}/coverage/${task.monday_id}`, { credentials: 'include' })
+                          .then(r => r.ok ? r.json() : null)
+                          .then(data => {
+                            if (!data?.files) return
+                            // Key coverage by filename for O(1) lookup in the drawer
+                            const byName = {}
+                            data.files.forEach(f => { byName[f.filename] = f })
+                            setTaskCoverage(byName)
+                          })
+                          .catch(() => {})
                       }}
                     />
                   ))}
@@ -621,6 +729,7 @@ export default function LibraryPage() {
                 handleSelectAsset(enriched)
               }}
               onClose={closeAll}
+              coverage={taskCoverage}
             />
           </>
         )

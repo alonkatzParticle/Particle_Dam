@@ -100,6 +100,19 @@ module.exports = function makeDb(dbPath) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+    CREATE TABLE IF NOT EXISTS meta_coverage (
+      task_id          TEXT NOT NULL,
+      filename         TEXT NOT NULL,
+      asset_id         TEXT,
+      uploaded_to_meta INTEGER,   -- 1=yes, 0=no, NULL=unchecked
+      meta_id          TEXT,
+      meta_status      TEXT,
+      account_id       TEXT,
+      last_checked     TEXT,
+      PRIMARY KEY (task_id, filename)
+    );
+    CREATE INDEX IF NOT EXISTS idx_meta_coverage_task ON meta_coverage(task_id);
   `);
 
   // ─── Migrations (safe to re-run) ────────────────────────────────────────────

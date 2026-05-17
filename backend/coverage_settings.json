@@ -1,0 +1,25 @@
+{
+  "metaToken": "EAAn1yKxMFZB0BRU8FI8PVcMGlg3tmlr8pq6Yy997C7ZAq2IOvbf7W2DVxJCZCCZAsFgDKOWZC4VPkB175b42TtkYZB7Gtcw3rklujiMUEReqbfOu1pZCCUxzSibNZAa7JjHlMYBqbGyBYuuyZAV6KPuHaCWUZC1jhZA00VIBTiIRNVzbtKa7gL8R37NLyFasXq4",
+  "metaAccountIds": [
+    "act_491904784778245",
+    "act_629379889984463",
+    "act_630991160030363",
+    "act_1415731056209748",
+    "act_755060757003997",
+    "act_766234322599102",
+    "act_1865518007646787",
+    "act_1893230381281058"
+  ],
+  "metaAccountNames": {
+    "act_491904784778245": "Particle Main",
+    "act_629379889984463": "Particle NextGen",
+    "act_630991160030363": "Particle Supplements New",
+    "act_766234322599102": "Particle Hair",
+    "act_1415731056209748": "Particle Fragrances",
+    "act_755060757003997": "Particle Body",
+    "act_1865518007646787": "Particle Skin",
+    "act_1893230381281058": "Particle Women"
+  },
+  "minTimelineDate": "2026-02",
+  "staleAfterDays": 7
+}
