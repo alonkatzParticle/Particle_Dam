@@ -706,6 +706,61 @@ cron.schedule('0 6 * * *', () => {
 
 console.log('[Coverage] Daily 06:00 scan scheduled');
 
+// GET /api/ads/coverage/qualifying-tasks
+// Returns all Marketing+Done/Completed tasks from the local DB (no Meta API)
+app.get('/api/ads/coverage/qualifying-tasks', requireAuth, (req, res) => {
+  try {
+    const rows = ads.db.prepare(`
+      SELECT monday_id, MIN(monday_json) AS mj, COUNT(*) AS asset_count
+      FROM   assets
+      WHERE  monday_id IS NOT NULL AND monday_json IS NOT NULL
+        AND  (deleted IS NULL OR deleted = 0)
+      GROUP BY monday_id
+    `).all();
+
+    const tasks = [];
+    for (const row of rows) {
+      let m = {};
+      try { m = JSON.parse(row.mj || '{}'); } catch { continue; }
+      const dept   = (m.department || '').toLowerCase();
+      const status = (m.status     || '').toLowerCase();
+      if (!/marketing/i.test(dept))                   continue;
+      if (!/done|completed|approved/i.test(status))   continue;
+      tasks.push({
+        monday_id:    row.monday_id,
+        task_name:    m.name || m.task_name || row.monday_id,
+        department:   m.department  || null,
+        status:       m.status      || null,
+        platform:     m.platform    || null,
+        product:      m.product     || null,
+        dropbox_link: m.dropbox_link || null,
+        timeline_end: m.timeline_end || null,
+        asset_count:  row.asset_count,
+      });
+    }
+    tasks.sort((a, b) => {
+      if (!a.timeline_end && !b.timeline_end) return 0;
+      if (!a.timeline_end) return 1;
+      if (!b.timeline_end) return -1;
+      return b.timeline_end.localeCompare(a.timeline_end);
+    });
+    res.json({ tasks, total: tasks.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/ads/coverage/scan/:taskId — scan one task, return result immediately
+app.post('/api/ads/coverage/scan/:taskId', requireAuth, async (req, res) => {
+  try {
+    const result   = await coverageScanTask(ads.db, req.params.taskId);
+    const coverage = getTaskCoverage(ads.db, req.params.taskId);
+    res.json({ ...result, coverage });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Ads-only: Monday sync ────────────────────────────────────────────────────
 
 app.post('/api/ads/monday/sync', (req, res) => {
