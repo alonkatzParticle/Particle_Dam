@@ -504,7 +504,7 @@ app.post('/api/raw/ai/suggest-tags', async (req, res) => {
 
 app.get('/api/ads/tasks', (req, res) => {
   try {
-    const { search = '', product = '', platform = '', campaign = '',
+    const { search = '', product = '', platform = '', campaign = '', board = '',
             page = '1', limit = '30' } = req.query;
     const pg = parseInt(page) || 1;
     const lm = Math.min(parseInt(limit) || 30, 100);
@@ -532,6 +532,10 @@ app.get('/api/ads/tasks', (req, res) => {
       conditions.push(`JSON_EXTRACT(monday_json, '$.campaign') = ?`);
       params.push(campaign);
     }
+    if (board) {
+      conditions.push(`JSON_EXTRACT(monday_json, '$.board_id') = ?`);
+      params.push(board);
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -551,6 +555,7 @@ app.get('/api/ads/tasks', (req, res) => {
         JSON_EXTRACT(monday_json, '$.campaign')    AS campaign,
         JSON_EXTRACT(monday_json, '$.status')      AS status,
         JSON_EXTRACT(monday_json, '$.board_id')    AS board_id,
+        JSON_EXTRACT(monday_json, '$.timeline_end') AS timeline_end,
         JSON_EXTRACT(monday_json, '$.frame_url')   AS frame_url,
         JSON_EXTRACT(monday_json, '$.project_url') AS project_url,
         JSON_EXTRACT(monday_json, '$.dropbox_url') AS dropbox_url,
@@ -566,7 +571,10 @@ app.get('/api/ads/tasks', (req, res) => {
         )) AS assets_json
       FROM assets ${where}
       GROUP BY monday_id
-      ORDER BY MAX(modified_at) DESC
+      ORDER BY
+        CASE WHEN MAX(JSON_EXTRACT(monday_json, '$.timeline_end')) IS NULL THEN 1 ELSE 0 END,
+        MAX(JSON_EXTRACT(monday_json, '$.timeline_end')) DESC,
+        MAX(modified_at) DESC
       LIMIT ? OFFSET ?
     `).all(...params, lm, offset);
 
@@ -578,6 +586,7 @@ app.get('/api/ads/tasks', (req, res) => {
       campaign:    r.campaign,
       status:      r.status,
       board_id:    r.board_id,
+      timeline_end: r.timeline_end,
       frame_url:   r.frame_url,
       project_url: r.project_url,
       dropbox_url: r.dropbox_url,
@@ -594,6 +603,16 @@ app.get('/api/ads/tasks', (req, res) => {
     console.error('[/api/ads/tasks]', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Ads-only: Available boards ───────────────────────────────────────────────
+
+app.get('/api/ads/boards', (_req, res) => {
+  const boards = [
+    { id: process.env.MONDAY_BOARD_ID,       label: 'Video' },
+    { id: process.env.MONDAY_IMAGE_BOARD_ID, label: 'Image / Design' },
+  ].filter(b => b.id);
+  res.json({ boards });
 });
 
 // ─── Ads-only: Monday sync ────────────────────────────────────────────────────

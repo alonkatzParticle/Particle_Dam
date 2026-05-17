@@ -117,6 +117,7 @@ module.exports = function makeDb(dbPath) {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_monday_id ON assets(monday_id)') } catch (_) {}
   try { db.exec('ALTER TABLE monday_tasks ADD COLUMN board_id TEXT') } catch (_) {}
   try { db.exec('ALTER TABLE monday_tasks ADD COLUMN campaign TEXT') } catch (_) {}
+  try { db.exec('ALTER TABLE monday_tasks ADD COLUMN timeline_end TEXT') } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assets_deleted ON assets(deleted)') } catch (_) {}
 
   // ─── Phase 1: structured DAM fields ────────────────────────────────────────

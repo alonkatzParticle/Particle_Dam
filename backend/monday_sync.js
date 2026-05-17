@@ -267,18 +267,19 @@ async function runMondaySync(db, opts = {}) {
       const upsert = db.prepare(`
         INSERT INTO monday_tasks
           (monday_id, board_id, name, status, product, task_type, department, platform, concept, hook,
-           dropbox_url, dropbox_key, frame_url, project_url, editor, campaign, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           dropbox_url, dropbox_key, frame_url, project_url, editor, campaign, timeline_end, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(monday_id) DO UPDATE SET
           board_id=excluded.board_id, name=excluded.name, status=excluded.status,
           product=excluded.product, task_type=excluded.task_type, department=excluded.department,
           platform=excluded.platform, concept=excluded.concept, hook=excluded.hook,
           dropbox_url=excluded.dropbox_url, dropbox_key=excluded.dropbox_key,
           frame_url=excluded.frame_url, project_url=excluded.project_url,
-          editor=excluded.editor, campaign=excluded.campaign, synced_at=excluded.synced_at
+          editor=excluded.editor, campaign=excluded.campaign,
+          timeline_end=excluded.timeline_end, synced_at=excluded.synced_at
       `);
       db.transaction(ts => {
-        for (const t of ts) upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor, t.campaign ?? null);
+        for (const t of ts) upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor, t.campaign ?? null, t.timeline_end ?? null);
       })(tasks);
 
       // Refresh monday_json on already-linked assets
@@ -342,6 +343,7 @@ async function runMondaySync(db, opts = {}) {
           hook:        task.hook,
           concept:     task.concept,
           campaign:    task.campaign,
+          timeline_end: task.timeline_end,
           dropbox_url: task.dropbox_url,
           frame_url:   task.frame_url,
           project_url: task.project_url,

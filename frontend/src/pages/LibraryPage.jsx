@@ -91,6 +91,8 @@ export default function LibraryPage() {
   const [platformFilter,  setPlatformFilter]  = useState(null)
   const [campaignFilter,  setCampaignFilter]  = useState(null)
   const [adsProductFilter, setAdsProductFilter] = useState(null)
+  const [boardFilter,     setBoardFilter]     = useState(null)   // null = all boards
+  const [boards,          setBoards]          = useState([])     // [{id, label}]
   const searchTimer = useRef(null)
 
   // ── URL deep-link sync: ?asset={dropbox_id} (opaque hex, not sequential int)
@@ -216,12 +218,14 @@ export default function LibraryPage() {
       const platform  = opts.platformFilter !== undefined ? opts.platformFilter : platformFilter
       const campaign  = opts.campaignFilter !== undefined ? opts.campaignFilter : campaignFilter
       const product   = opts.adsProductFilter !== undefined ? opts.adsProductFilter : adsProductFilter
+      const board     = opts.boardFilter !== undefined ? opts.boardFilter : boardFilter
       const currentPage = opts.page !== undefined ? opts.page : page
 
       if (searchVal) params.set('search', searchVal)
       if (platform)  params.set('platform', platform)
       if (campaign)  params.set('campaign', campaign)
       if (product)   params.set('product', product)
+      if (board)     params.set('board', board)
       params.set('page', currentPage)
       params.set('limit', '30')
 
@@ -231,7 +235,7 @@ export default function LibraryPage() {
       setPages(data.pages || 1)
     } catch { setTasks([]) }
     finally { setLoading(false); setRefreshing(false) }
-  }, [search, platformFilter, campaignFilter, adsProductFilter, page, apiBase])
+  }, [search, platformFilter, campaignFilter, adsProductFilter, boardFilter, page, apiBase])
 
   // Re-fetch whenever any filter changes
   useEffect(() => {
@@ -262,12 +266,13 @@ export default function LibraryPage() {
   }, [tasks, isAds, apiBase])
 
 
-  // Ads: fetch dynamic Monday lists once
+  // Ads: fetch dynamic Monday lists + boards once
   useEffect(() => {
     if (!isAds) return
     fetch(`${apiBase}/monday/platforms`).then(r => r.ok ? r.json() : []).then(setMondayPlatforms).catch(() => {})
     fetch(`${apiBase}/monday/campaigns`).then(r => r.ok ? r.json() : []).then(setMondayCampaigns).catch(() => {})
     fetch(`${apiBase}/monday/products`).then(r  => r.ok ? r.json() : []).then(setMondayProducts).catch(() => {})
+    fetch(`${apiBase}/boards`).then(r => r.ok ? r.json() : { boards: [] }).then(d => setBoards(d.boards || [])).catch(() => {})
   }, [isAds, apiBase])
 
   // Debounce search — detect URLs for link-mode (ads only), otherwise normal search
@@ -441,6 +446,38 @@ export default function LibraryPage() {
             onClear={handleClear}
           />
         </div>
+
+        {/* Board toggle — ads mode only */}
+        {isAds && boards.length > 0 && (
+          <div className="flex items-center gap-2 px-6 py-2 border-b border-[var(--border)] shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted-foreground)] mr-1">Board</span>
+            <button
+              onClick={() => { setBoardFilter(null); setPage(1) }}
+              className={cn(
+                'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                boardFilter === null
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
+              )}
+            >
+              All
+            </button>
+            {boards.map(b => (
+              <button
+                key={b.id}
+                onClick={() => { setBoardFilter(boardFilter === b.id ? null : b.id); setPage(1) }}
+                className={cn(
+                  'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                  boardFilter === b.id
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10'
+                )}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Link-mode banner — Final Assets only */}
         {isAds && linkMode && (
