@@ -111,7 +111,7 @@ export function AppLayout() {
       const poll = setInterval(async () => {
         const s = await fetch(`${apiBase}/monday/sync/status`).then(r => r.json()).catch(() => ({}))
         setMondayStatus(s)
-        if (!s.running) { setMondaySyncing(false); clearInterval(poll) }
+        if (!s.running) { setMondaySyncing(false); clearInterval(poll); window.dispatchEvent(new CustomEvent('asset-library-synced')) }
       }, 2000)
     } catch {
       setMondaySyncing(false)
