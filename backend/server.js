@@ -500,6 +500,102 @@ app.post('/api/raw/ai/suggest-tags', async (req, res) => {
   } catch (err) { res.json({ suggestions: [] }); }
 });
 
+// ─── Ads-only: Task-grouped view ─────────────────────────────────────────────
+
+app.get('/api/ads/tasks', (req, res) => {
+  try {
+    const { search = '', product = '', platform = '', campaign = '',
+            page = '1', limit = '30' } = req.query;
+    const pg = parseInt(page) || 1;
+    const lm = Math.min(parseInt(limit) || 30, 100);
+    const offset = (pg - 1) * lm;
+
+    const conditions = [
+      `monday_id IS NOT NULL`,
+      `(deleted IS NULL OR deleted = 0)`,
+    ];
+    const params = [];
+
+    if (search) {
+      conditions.push(`JSON_EXTRACT(monday_json, '$.name') LIKE ?`);
+      params.push(`%${search}%`);
+    }
+    if (product) {
+      conditions.push(`JSON_EXTRACT(monday_json, '$.product') = ?`);
+      params.push(product);
+    }
+    if (platform) {
+      conditions.push(`JSON_EXTRACT(monday_json, '$.platform') = ?`);
+      params.push(platform);
+    }
+    if (campaign) {
+      conditions.push(`JSON_EXTRACT(monday_json, '$.campaign') = ?`);
+      params.push(campaign);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countRow = ads.db.prepare(`
+      SELECT COUNT(DISTINCT monday_id) AS total
+      FROM assets ${where}
+    `).get(...params);
+    const total = countRow?.total || 0;
+    const pages = Math.ceil(total / lm) || 1;
+
+    const rows = ads.db.prepare(`
+      SELECT
+        monday_id,
+        JSON_EXTRACT(monday_json, '$.name')        AS task_name,
+        JSON_EXTRACT(monday_json, '$.product')     AS product,
+        JSON_EXTRACT(monday_json, '$.platform')    AS platform,
+        JSON_EXTRACT(monday_json, '$.campaign')    AS campaign,
+        JSON_EXTRACT(monday_json, '$.status')      AS status,
+        JSON_EXTRACT(monday_json, '$.board_id')    AS board_id,
+        JSON_EXTRACT(monday_json, '$.frame_url')   AS frame_url,
+        JSON_EXTRACT(monday_json, '$.project_url') AS project_url,
+        JSON_EXTRACT(monday_json, '$.dropbox_url') AS dropbox_url,
+        COUNT(*) AS asset_count,
+        json_group_array(json_object(
+          'id', id,
+          'name', name,
+          'path', path,
+          'extension', extension,
+          'dropbox_id', dropbox_id,
+          'size', size,
+          'monday_json', monday_json
+        )) AS assets_json
+      FROM assets ${where}
+      GROUP BY monday_id
+      ORDER BY MAX(modified_at) DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, lm, offset);
+
+    const tasks = rows.map(r => ({
+      monday_id:   r.monday_id,
+      task_name:   r.task_name,
+      product:     r.product,
+      platform:    r.platform,
+      campaign:    r.campaign,
+      status:      r.status,
+      board_id:    r.board_id,
+      frame_url:   r.frame_url,
+      project_url: r.project_url,
+      dropbox_url: r.dropbox_url,
+      asset_count: r.asset_count,
+      assets: JSON.parse(r.assets_json || '[]').map(a => ({
+        ...a,
+        monday: a.monday_json ? JSON.parse(a.monday_json) : null,
+        monday_json: undefined,
+      })),
+    }));
+
+    res.json({ tasks, total, page: pg, pages });
+  } catch (err) {
+    console.error('[/api/ads/tasks]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Ads-only: Monday sync ────────────────────────────────────────────────────
 
 app.post('/api/ads/monday/sync', (req, res) => {

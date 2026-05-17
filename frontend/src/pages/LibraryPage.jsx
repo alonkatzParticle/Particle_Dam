@@ -3,6 +3,8 @@ import { FilterBar } from '../components/FilterBar'
 import { SearchBar } from '../components/SearchBar'
 import { SortControl } from '../components/SortControl'
 import { AssetCard, AssetPreviewModal } from '../components/AssetCard'
+import { TaskCard } from '../components/TaskCard'
+import { TaskExpandedView } from '../components/TaskExpandedView'
 import { MondayPanel } from '../components/MondayPanel'
 import { EXT_GROUPS, cn } from '../lib/utils'
 import { AI_TAG_MAP, AI_TAGS, AI_TAG_CATEGORIES, parseAiTags } from '../lib/aiTags'
@@ -71,6 +73,9 @@ export default function LibraryPage() {
   const [containers, setContainers]       = useState({ products: [], bundles: [] })
   const [containerFilter, setContainerFilter] = useState(null)
   const [contentTypeFilter, setContentTypeFilter] = useState(null)
+  // Ads: task-grouped view
+  const [tasks, setTasks]               = useState([])
+  const [expandedTask, setExpandedTask] = useState(null)
   // Final Assets (ads) specific
   const [mondayAsset, setMondayAsset]   = useState(null)
   const [linkMode, setLinkMode]         = useState(false)
@@ -201,15 +206,44 @@ export default function LibraryPage() {
     finally { setLoading(false); setRefreshing(false) }
   }, [search, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page, isAds, apiBase])
 
+  // ── Ads task-grouped fetch ─────────────────────────────────────────────────
+  const fetchTasks = useCallback(async (opts = {}) => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      const searchVal = opts.search   !== undefined ? opts.search   : search
+      const platform  = opts.platformFilter !== undefined ? opts.platformFilter : platformFilter
+      const campaign  = opts.campaignFilter !== undefined ? opts.campaignFilter : campaignFilter
+      const product   = opts.adsProductFilter !== undefined ? opts.adsProductFilter : adsProductFilter
+      const currentPage = opts.page !== undefined ? opts.page : page
+
+      if (searchVal) params.set('search', searchVal)
+      if (platform)  params.set('platform', platform)
+      if (campaign)  params.set('campaign', campaign)
+      if (product)   params.set('product', product)
+      params.set('page', currentPage)
+      params.set('limit', '30')
+
+      const data = await fetch(`${apiBase}/tasks?${params}`).then(r => r.json())
+      setTasks(data.tasks || [])
+      setTotal(data.total || 0)
+      setPages(data.pages || 1)
+    } catch { setTasks([]) }
+    finally { setLoading(false); setRefreshing(false) }
+  }, [search, platformFilter, campaignFilter, adsProductFilter, page, apiBase])
+
   // Re-fetch whenever any filter changes
-  useEffect(() => { fetchAssets() }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page])
+  useEffect(() => {
+    if (isAds) fetchTasks()
+    else fetchAssets()
+  }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page])
 
   // Auto-refetch when a sync completes (fired by AppLayout)
   useEffect(() => {
-    const handler = () => fetchAssets()
+    const handler = () => isAds ? fetchTasks() : fetchAssets()
     window.addEventListener('asset-library-synced', handler)
     return () => window.removeEventListener('asset-library-synced', handler)
-  }, [fetchAssets])
+  }, [fetchAssets, fetchTasks, isAds])
 
   // Ads: fetch dynamic Monday lists once
   useEffect(() => {
@@ -239,7 +273,10 @@ export default function LibraryPage() {
           setLinkMode(false)
           setLinkResult(null)
         }
-        if (!search) {
+        if (isAds) {
+          setPage(1)
+          fetchTasks({ search, page: 1 })
+        } else if (!search) {
           setSemanticMode(false)
           setSemanticAssets([])
           setSemanticMessage('')
@@ -284,7 +321,8 @@ export default function LibraryPage() {
     setLinkResult(null)
     setSearch('')
     setPage(1)
-    fetchAssets({ tagIds: [], aiTags: [], extFilter: '', search: '', page: 1 })
+    if (isAds) fetchTasks({ search: '', page: 1 })
+    else fetchAssets({ tagIds: [], aiTags: [], extFilter: '', search: '', page: 1 })
   }
 
   const handleAiSearch = async (query) => {
@@ -421,10 +459,34 @@ export default function LibraryPage() {
 
         {/* Grid */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {loading && !semanticMode ? (
+          {loading ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               {Array.from({ length: 20 }).map((_, i) => <SkeletonCard key={i} />)}
             </div>
+          ) : isAds ? (
+            /* ── Ads: task-grouped grid ── */
+            tasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 gap-3">
+                <span className="text-4xl opacity-30">📋</span>
+                <p className="text-[var(--muted-foreground)] text-sm">No tasks found</p>
+                {(platformFilter || campaignFilter || adsProductFilter || search) && (
+                  <button onClick={handleClear} className="text-[var(--primary)] text-sm hover:opacity-70 transition-opacity">Clear filters</button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 fade-in">
+                  {tasks.map(task => (
+                    <TaskCard
+                      key={task.monday_id}
+                      task={task}
+                      onClick={() => setExpandedTask(task)}
+                    />
+                  ))}
+                </div>
+                <Pagination page={page} pages={pages} onPage={p => { setPage(p); window.scrollTo(0, 0) }} />
+              </>
+            )
           ) : (semanticMode ? semanticAssets : assets).length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 gap-3">
               <span className="text-4xl opacity-30">{semanticMode ? '🔍' : '📂'}</span>
@@ -462,15 +524,39 @@ export default function LibraryPage() {
         </div>
       </div>
 
+      {/* Task expanded view — ads mode */}
+      {isAds && expandedTask && (
+        <TaskExpandedView
+          task={expandedTask}
+          onClose={() => setExpandedTask(null)}
+          onSelectAsset={asset => {
+            // enrich asset with monday data if not already present
+            const enriched = asset.monday ? asset : { ...asset, monday: expandedTask }
+            handleSelectAsset(enriched)
+          }}
+        />
+      )}
+
       {selectedAsset && (
         <AssetPreviewModal
           asset={selectedAsset}
           tags={tags}
-          onClose={closeAsset}
+          onClose={() => {
+            // In ads mode: close modal but keep task drawer open
+            setSelectedAsset(null)
+            if (!isAds) {
+              const params = new URLSearchParams(location.search)
+              params.delete('asset')
+              navigate({ search: params.toString() }, { replace: true })
+            }
+            if (!isAds && needsRefreshRef.current) {
+              needsRefreshRef.current = false
+              fetchAssets()
+            }
+          }}
           onAiTagsUpdated={handleAiTagsUpdated}
           onContentTypeChange={(assetId, newType, newPath) => {
             needsRefreshRef.current = true
-            // Update the modal's displayed path immediately
             setSelectedAsset(prev =>
               prev && prev.id === assetId
                 ? { ...prev, content_type: newType, path: newPath }
