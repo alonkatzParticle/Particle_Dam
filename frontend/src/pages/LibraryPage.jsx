@@ -241,7 +241,7 @@ export default function LibraryPage() {
   useEffect(() => {
     if (isAds) fetchTasks()
     else fetchAssets()
-  }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, sort, page])
+  }, [apiBase, selectedTagIds, selectedAiTags, extFilter, containerFilter, contentTypeFilter, platformFilter, campaignFilter, adsProductFilter, boardFilter, sort, page])
 
   // Auto-refetch when a sync completes (fired by AppLayout)
   useEffect(() => {
