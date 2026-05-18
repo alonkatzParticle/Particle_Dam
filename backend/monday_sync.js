@@ -276,10 +276,25 @@ async function runMondaySync(db, opts = {}) {
           dropbox_url=excluded.dropbox_url, dropbox_key=excluded.dropbox_key,
           frame_url=excluded.frame_url, project_url=excluded.project_url,
           editor=excluded.editor, campaign=excluded.campaign,
-          timeline_end=excluded.timeline_end, synced_at=excluded.synced_at
+          timeline_end=excluded.timeline_end, synced_at=excluded.synced_at,
+          dropbox_path = CASE
+            WHEN excluded.dropbox_url IS DISTINCT FROM monday_tasks.dropbox_url THEN NULL
+            ELSE monday_tasks.dropbox_path
+          END
       `);
+      // Track URL changes — unlink old assets and clear path so re-resolution happens
+      const getUrl = db.prepare('SELECT dropbox_url, dropbox_path FROM monday_tasks WHERE monday_id = ?');
+      const unlinkAssets = db.prepare('UPDATE assets SET monday_id = NULL WHERE monday_id = ? AND (deleted IS NULL OR deleted = 0)');
+
       db.transaction(ts => {
-        for (const t of ts) upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor, t.campaign ?? null, t.timeline_end ?? null);
+        for (const t of ts) {
+          const existing = getUrl.get(t.monday_id);
+          if (existing && existing.dropbox_url !== t.dropbox_url && existing.dropbox_path) {
+            console.log(`[Sync] URL changed for ${t.monday_id} — unlinking old assets at ${existing.dropbox_path}`);
+            unlinkAssets.run(t.monday_id);
+          }
+          upsert.run(t.monday_id, t.board_id, t.name, t.status, t.product, t.task_type, t.department, t.platform, t.concept, t.hook, t.dropbox_url, extractDropboxKey(t.dropbox_url), t.frame_url, t.project_url, t.editor, t.campaign ?? null, t.timeline_end ?? null);
+        }
       })(tasks);
 
       // Refresh monday_json on already-linked assets
