@@ -655,7 +655,9 @@ let _qualifyingTasksCache = null;
 
 function buildQualifyingTasksCache(db) {
   try {
-    // monday_tasks has one row per task with proper indexed columns — no JSON blobs
+    // monday_tasks has one row per task with proper indexed columns — no JSON blobs.
+    // INNER JOIN assets ensures we only return tasks that actually have indexed Dropbox
+    // files (i.e. the same tasks visible in the library grid view).
     const rows = db.prepare(`
       SELECT mt.monday_id,
              mt.name        AS task_name,
@@ -667,8 +669,8 @@ function buildQualifyingTasksCache(db) {
              mt.timeline_end,
              COUNT(a.id)    AS asset_count
       FROM   monday_tasks mt
-      LEFT JOIN assets a ON a.monday_id = mt.monday_id
-                         AND (a.deleted IS NULL OR a.deleted = 0)
+      INNER JOIN assets a ON a.monday_id = mt.monday_id
+                          AND (a.deleted IS NULL OR a.deleted = 0)
       WHERE  mt.department IS NOT NULL
         AND  lower(mt.department) LIKE '%marketing%'
         AND  lower(mt.status) IN ('done','completed','approved','sent to client','upload complete')
@@ -677,7 +679,7 @@ function buildQualifyingTasksCache(db) {
     `).all();
 
     _qualifyingTasksCache = rows;
-    console.log(`[Coverage] Qualifying tasks cache built — ${rows.length} tasks`);
+    console.log(`[Coverage] Qualifying tasks cache built — ${rows.length} tasks with indexed assets`);
     return rows;
   } catch (err) {
     console.error('[Coverage] Failed to build qualifying tasks cache:', err.message);
