@@ -693,7 +693,7 @@ function getQualifyingTasksCache() {
 }
 
 // GET /api/ads/coverage/:taskId — file-level coverage for one task
-app.get('/api/ads/coverage/:taskId', requireAuth, (req, res) => {
+app.get('/api/ads/coverage/:taskId', (req, res) => {
   try {
     const data = getTaskCoverage(ads.db, req.params.taskId);
     res.json(data);
@@ -703,7 +703,7 @@ app.get('/api/ads/coverage/:taskId', requireAuth, (req, res) => {
 });
 
 // POST /api/ads/coverage/batch — summary for multiple tasks (used by grid filter)
-app.post('/api/ads/coverage/batch', requireAuth, (req, res) => {
+app.post('/api/ads/coverage/batch', (req, res) => {
   try {
     const { taskIds } = req.body;
     if (!Array.isArray(taskIds)) return res.status(400).json({ error: 'taskIds must be an array' });
@@ -714,7 +714,7 @@ app.post('/api/ads/coverage/batch', requireAuth, (req, res) => {
 });
 
 // POST /api/ads/coverage/refresh — background refresh for visible tasks (fire & forget)
-app.post('/api/ads/coverage/refresh', requireAuth, (req, res) => {
+app.post('/api/ads/coverage/refresh', (req, res) => {
   const { taskIds } = req.body || {};
   res.json({ started: true });
   // Run in background — don't await
@@ -724,7 +724,7 @@ app.post('/api/ads/coverage/refresh', requireAuth, (req, res) => {
 });
 
 // POST /api/ads/coverage/scan/all — manual trigger for full batch scan
-app.post('/api/ads/coverage/scan/all', requireAuth, (req, res) => {
+app.post('/api/ads/coverage/scan/all', (req, res) => {
   res.json({ started: true, alreadyRunning: isBatchRunning() });
   if (!isBatchRunning()) {
     runBatchScan(ads.db).catch(e => console.error('[Coverage] batch error:', e.message));
@@ -732,7 +732,7 @@ app.post('/api/ads/coverage/scan/all', requireAuth, (req, res) => {
 });
 
 // GET /api/ads/coverage/settings — check if Meta is configured
-app.get('/api/ads/coverage/settings', requireAuth, (_req, res) => {
+app.get('/api/ads/coverage/settings', (_req, res) => {
   const { metaToken, metaAccountIds, metaAccountNames } = loadCoverageSettings();
   res.json({
     configured: !!(metaToken && metaAccountIds?.length),
@@ -752,7 +752,7 @@ cron.schedule('0 6 * * *', () => {
 console.log('[Coverage] Daily 06:00 scan scheduled');
 
 // GET /api/ads/coverage/qualifying-tasks — served from RAM, zero DB query
-app.get('/api/ads/coverage/qualifying-tasks', requireAuth, (req, res) => {
+app.get('/api/ads/coverage/qualifying-tasks', (req, res) => {
   // Force-rebuild if caller passes ?refresh=1 (e.g. after a manual task edit)
   if (req.query.refresh === '1' || _qualifyingTasksCache === null) {
     buildQualifyingTasksCache(ads.db);
@@ -762,7 +762,7 @@ app.get('/api/ads/coverage/qualifying-tasks', requireAuth, (req, res) => {
 });
 
 // POST /api/ads/coverage/scan/:taskId — scan one task, return result immediately
-app.post('/api/ads/coverage/scan/:taskId', requireAuth, async (req, res) => {
+app.post('/api/ads/coverage/scan/:taskId', async (req, res) => {
   try {
     const result   = await coverageScanTask(ads.db, req.params.taskId);
     const coverage = getTaskCoverage(ads.db, req.params.taskId);
