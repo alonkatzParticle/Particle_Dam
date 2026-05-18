@@ -692,7 +692,27 @@ function getQualifyingTasksCache() {
   return _qualifyingTasksCache;
 }
 
-// GET /api/ads/coverage/:taskId — file-level coverage for one task
+// GET /api/ads/coverage/settings — check if Meta is configured
+app.get('/api/ads/coverage/settings', (_req, res) => {
+  const { metaToken, metaAccountIds, metaAccountNames } = loadCoverageSettings();
+  res.json({
+    configured: !!(metaToken && metaAccountIds?.length),
+    accountCount: metaAccountIds?.length || 0,
+    accounts: metaAccountNames || {},
+  });
+});
+
+// GET /api/ads/coverage/qualifying-tasks — served from RAM, zero DB query
+app.get('/api/ads/coverage/qualifying-tasks', (req, res) => {
+  // Force-rebuild if caller passes ?refresh=1 (e.g. after a manual task edit)
+  if (req.query.refresh === '1' || _qualifyingTasksCache === null) {
+    buildQualifyingTasksCache(ads.db);
+  }
+  const tasks = _qualifyingTasksCache || [];
+  res.json({ tasks, total: tasks.length });
+});
+
+// GET /api/ads/coverage/:taskId — file-level coverage for one task (wildcard — must be last)
 app.get('/api/ads/coverage/:taskId', (req, res) => {
   try {
     const data = getTaskCoverage(ads.db, req.params.taskId);
@@ -731,35 +751,6 @@ app.post('/api/ads/coverage/scan/all', (req, res) => {
   }
 });
 
-// GET /api/ads/coverage/settings — check if Meta is configured
-app.get('/api/ads/coverage/settings', (_req, res) => {
-  const { metaToken, metaAccountIds, metaAccountNames } = loadCoverageSettings();
-  res.json({
-    configured: !!(metaToken && metaAccountIds?.length),
-    accountCount: metaAccountIds?.length || 0,
-    accounts: metaAccountNames || {},
-  });
-});
-
-// ─── Daily cron: batch Meta coverage scan at 06:00 ───────────────────────────
-
-const cron = require('node-cron');
-cron.schedule('0 6 * * *', () => {
-  console.log('[Coverage] Starting scheduled daily scan…');
-  runBatchScan(ads.db).catch(e => console.error('[Coverage] Daily scan error:', e.message));
-}, { timezone: 'Asia/Jerusalem' });
-
-console.log('[Coverage] Daily 06:00 scan scheduled');
-
-// GET /api/ads/coverage/qualifying-tasks — served from RAM, zero DB query
-app.get('/api/ads/coverage/qualifying-tasks', (req, res) => {
-  // Force-rebuild if caller passes ?refresh=1 (e.g. after a manual task edit)
-  if (req.query.refresh === '1' || _qualifyingTasksCache === null) {
-    buildQualifyingTasksCache(ads.db);
-  }
-  const tasks = _qualifyingTasksCache || [];
-  res.json({ tasks, total: tasks.length });
-});
 
 // POST /api/ads/coverage/scan/:taskId — scan one task, return result immediately
 app.post('/api/ads/coverage/scan/:taskId', async (req, res) => {
