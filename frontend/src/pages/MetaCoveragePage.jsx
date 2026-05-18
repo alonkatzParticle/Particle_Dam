@@ -210,39 +210,37 @@ export default function MetaCoveragePage() {
       .catch(() => {})
   }, [])
 
-  // Load qualifying tasks (fast DB query — no Meta API)
+  // Load qualifying tasks (instant — from server RAM cache)
   const loadTasks = useCallback(async () => {
     setLoading(true)
     try {
       const res  = await api('/coverage/qualifying-tasks')
       const data = res.ok ? await res.json() : { tasks: [] }
       setTasks(data.tasks || [])
+      setLoading(false)  // ← show task list immediately, don't wait for coverage
 
-      // Also load any existing coverage from the DB
+      // Load existing coverage summaries in background (non-blocking)
       const ids = (data.tasks || []).map(t => t.monday_id).filter(Boolean)
       if (ids.length) {
-        // Load batch coverage summary
         const covRes = await api('/coverage/batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ taskIds: ids }),
         })
         if (covRes.ok) {
-          // batch gives { [taskId]: { total, uploaded, notUploaded } }
-          // We'll store a minimal placeholder so we know it's been scanned
           const batchSummary = await covRes.json()
           const initial = {}
           for (const [taskId, summary] of Object.entries(batchSummary)) {
             if (summary.total > 0) {
-              // Mark as "has data" so the filter works — files loaded on expand
               initial[taskId] = { files: null, summary, preloaded: true }
             }
           }
           setTaskData(initial)
         }
       }
-    } catch { /* silently fail */ }
-    setLoading(false)
+    } catch {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => { loadTasks() }, [loadTasks])

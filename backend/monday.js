@@ -51,6 +51,7 @@ const BOARDS = {
       'color_mm2v5q62',         // Campaign
       'timeline3__1',            // Timeline (Video Projects board)
     ],
+    timelineColId: 'timeline3__1',
     mapItem(item, cols) {
       return {
         monday_id:   item.id,
@@ -87,6 +88,7 @@ const BOARDS = {
       'text_mm1grv7e',          // Ad Name
       'timeline_1_Mjj5Yton',    // Timeline (Design Projects board)
     ],
+    timelineColId: 'timeline_1_Mjj5Yton',
     mapItem(item, cols) {
       return {
         monday_id:   item.id,
@@ -109,7 +111,9 @@ const BOARDS = {
   },
 };
 
-// ─── Fetch all tasks from a board ─────────────────────────────────────────────
+// ─── Fetch tasks from a board, filtered to timeline_end >= 2026-01-01 ──────────
+
+const TIMELINE_MIN = '2026-01-01';  // only fetch tasks ending Jan 2026 or later
 
 async function fetchBoardTasks(boardDef) {
   const boardId = process.env[boardDef.envKey];
@@ -119,10 +123,17 @@ async function fetchBoardTasks(boardDef) {
   const tasks = [];
   let cursor = null;
 
+  // Filter at the Monday API level — only tasks whose timeline ends on/after Jan 2026.
+  // The timeline column ID differs per board (fixed after the swap bug).
+  const timelineColId = boardDef.timelineColId;
+  const filterArg = timelineColId
+    ? `, query_params: { rules: [{ column_id: "${timelineColId}", compare_value: ["${TIMELINE_MIN}", "2099-12-31"], operator: between }] }`
+    : '';
+
   do {
     const paginationArg = cursor
       ? `(limit: 100, cursor: "${cursor}")`
-      : '(limit: 100)';
+      : `(limit: 100${filterArg})`;
 
     const query = `{
       boards(ids: [${boardId}]) {
