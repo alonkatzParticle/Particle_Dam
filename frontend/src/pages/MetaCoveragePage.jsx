@@ -331,6 +331,7 @@ export default function MetaCoveragePage() {
   })
 
   return (
+    <div style={{ height: '100%', overflowY: 'auto' }}>
     <div style={{
       padding: '28px 36px', maxWidth: 1100, margin: '0 auto',
       fontFamily: 'Inter, system-ui, sans-serif', color: 'var(--foreground)',
@@ -478,6 +479,7 @@ export default function MetaCoveragePage() {
       <p style={{ marginTop: 14, fontSize: 10, color: 'var(--muted-foreground)', textAlign: 'center' }}>
         Daily scan runs at 06:00 (Jerusalem) · Token: {connection?.configured ? '✓ valid' : '✗ not configured'}
       </p>
+    </div>
     </div>
   )
 }
