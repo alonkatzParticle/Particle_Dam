@@ -49,7 +49,7 @@ const BOARDS = {
       'short_text_mkn8n4bx',    // Hook
       'people',                 // Editor
       'color_mm2v5q62',         // Campaign
-      'timeline_1_Mjj5Yton',    // Timeline
+      'timeline3__1',            // Timeline (Video Projects board)
     ],
     mapItem(item, cols) {
       return {
@@ -68,7 +68,7 @@ const BOARDS = {
         project_url: cols['link1__1']                 || null,
         editor:      cols['people']                   || null,
         campaign:    cols['color_mm2v5q62']           || null,
-        timeline_end: cols['timeline_1_Mjj5Yton']     || null,
+        timeline_end: cols['timeline3__1']             || null,
       };
     },
   },
@@ -85,7 +85,7 @@ const BOARDS = {
       'long_textpvqldjpg',      // Concept
       'people',                 // Designer
       'text_mm1grv7e',          // Ad Name
-      'timeline3__1',           // Timeline
+      'timeline_1_Mjj5Yton',    // Timeline (Design Projects board)
     ],
     mapItem(item, cols) {
       return {
@@ -103,7 +103,7 @@ const BOARDS = {
         frame_url:   cols['link']                     || null,  // Figma
         project_url: null,
         editor:      cols['people']                   || null,
-        timeline_end: cols['timeline3__1']            || null,
+        timeline_end: cols['timeline_1_Mjj5Yton']     || null,
       };
     },
   },
